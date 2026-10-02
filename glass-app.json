@@ -1,0 +1,29 @@
+{
+  "apiVersion": 1,
+  "type": "calcifer",
+  "title": "Calcifer",
+  "icon": "icon.svg",
+  "singleton": true,
+  "autoOpen": false,
+  "description": "Calcifer, a fire demon in his hearth: Claude's animated persona. He talks while Claude's replies are spoken and shows whatever mood Claude gives him.",
+  "commands": {
+    "mood": { "usage": "mood --mood <neutral|happy|grumpy|angry|sad|scared|thinking|sleepy|smug|excited> [--for <seconds>]", "help": "Set Calcifer's expression (held until changed, or for --for seconds)" },
+    "react": { "usage": "react --kind <flare|sputter|sparks|wince>", "help": "A one-shot reaction: flare up, sputter low, throw sparks, wince" },
+    "say": { "usage": "say --text <text>", "help": "Make him mouth some text now (speech normally follows your replies by itself)" },
+    "hush": { "usage": "hush", "help": "Stop talking" }
+  },
+  "permissions": { "microphone": true, "storage": true },
+  "stored": {
+    "inputDevice": { "scope": "global", "default": "" }
+  },
+  "settings": {
+    "persona": { "type": "bool", "label": "Claude speaks as Calcifer", "default": true },
+    "audioSource": { "type": "enum", "label": "Lip sync from", "default": "text", "options": ["text", "input", "both"] },
+    "audioGain": { "type": "number", "label": "Audio sensitivity", "default": 1, "min": 0.2, "max": 5 },
+    "autoSpeak": { "type": "bool", "label": "Talk along with Claude's replies (text mode)", "default": true },
+    "speechRate": { "type": "number", "label": "Speech speed (characters per second)", "default": 15, "min": 5, "max": 40 },
+    "speechDelay": { "type": "number", "label": "Delay before talking (ms, TTS latency)", "default": 700, "min": 0, "max": 5000 },
+    "subtitles": { "type": "bool", "label": "Show subtitles", "default": false },
+    "hearth": { "type": "bool", "label": "Draw the fireplace", "default": true }
+  }
+}

@@ -1,0 +1,875 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="glass-app://sdk/glass-app.css">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #sub { position: fixed; left: 50%; bottom: 5%; transform: translateX(-50%); max-width: 86%;
+    text-align: center; font: 500 15px/1.35 var(--font-sans, system-ui); color: #ffe9c4;
+    text-shadow: 0 1px 3px #000, 0 0 12px rgba(0,0,0,.8); pointer-events: none; opacity: 0; transition: opacity .25s; }
+  #sub.on { opacity: 1; }
+  /* Audio input picker: only in "input" mode, and only visible while hovering the window. */
+  #device { position: fixed; right: 10px; top: 8px; max-width: 60%; font: 12px var(--font-sans, system-ui);
+    color: #ffe9c4; background: rgba(20, 12, 10, 0.7); border: 1px solid rgba(255, 200, 150, 0.25);
+    border-radius: 6px; padding: 3px 6px; opacity: 0; transition: opacity .2s; display: none; }
+  #device.on { display: block; }
+  body:hover #device { opacity: 1; }
+  #status { position: fixed; left: 10px; top: 8px; right: 10px; font: 12px/1.3 var(--font-sans, system-ui);
+    color: #ffcf9e; text-shadow: 0 1px 2px #000; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<canvas id="fire"></canvas>
+<canvas id="fg"></canvas>
+<div id="sub"></div>
+<div id="status"></div>
+<select id="device" title="Audio input he listens to"></select>
+<script src="glass-app://sdk/glass-app.js"></script>
+<script src="persona/calcifer.js?v=3"></script><!-- bump ?v= when the persona changes -->
+<script src="assets/sway.js?v=8"></script><!-- bump ?v= when the scene's images change -->
+
+<script>
+/*
+ * Calcifer, after the film: a soft glowing flame (yellow core, orange body, red licking tips)
+ * with cream eyes, dot pupils and a red mouth, hugging a log in a painted hearth.
+ *
+ * Layers, back to front: the painted hearth (assets/hearth-bare.jpg, plus the hanging herbs as
+ * swaying layers) lit by him, his body (a WebGL
+ * flame shader), then on the 2D layer his face, the log (assets/log.png, cut from the painting)
+ * and his arms over it.
+ *
+ * Everything he does is a rig parameter:
+ *   body:  size, lean, sway (flame speed), heat (palette), impulse (flare/sputter)
+ *   eyes:  eye (scale), lid (upper lid 0..1), tilt (+ = inner corners down, angry),
+ *          smileEyes (cheeks push up), pupil (size), px/py (gaze), squint
+ *   mouth: open (0..1), wide (0 round .. 1 wide), curve (-1 frown .. 1 smile), teeth
+ *   arms:  hug (how tightly he holds the log)
+ * Moods are poses (partial parameter sets). On top run blinks, glances, flicker and speech
+ * (visemes from the reply text). Another renderer (a Rive file, say) would take the same params.
+ */
+
+// ---------- The painted hearth and where the log sits in it (fractions of the image) ----------
+// Paths come from assets/sway.js (versioned, so the page never shows a stale copy)
+const HEARTH = { src: window.HEARTH_SRC || 'assets/hearth-bare.jpg', w: 2528, h: 1696 }; // without the hanging things (they're layers)
+// Where log.png sits in the painting (fractions; from sway.js, since the hand-cut file's crop can
+// change), the log's center, and the height of its top edge (he sits just behind that).
+const LOG = { src: window.LOG_SRC || 'assets/log.png', ...(window.LOG_RECT || { x: 0.37184, y: 0.69575, w: 0.25119, h: 0.15625 }),
+  cx: 0.4982, topY: 0.72700, span: 0.25119, thick: 0.15625 };
+
+// ---------- The persona: palettes, poses, reactions, idle habits (persona/calcifer.js) ----------
+const P = window.PERSONA;
+const PAL = P.palettes, BASE = P.base, MOODS = P.moods;
+const CORE_LIGHT = [1.0, 0.95, 0.68];
+const BODY_ALPHA = 0.85; // his flame (body and arms); the face layer has its own opacity in CSS
+const EASED = ['size', 'lean', 'sway', 'eye', 'tall', 'lid', 'tilt', 'smileEyes', 'pupil', 'px', 'py', 'open', 'wide', 'curve', 'teeth', 'embers', 'tremble', 'hug'];
+
+// ---------- Speech: text -> syllables with visemes -> mouth ----------
+function cleanText(t) {
+  return t.replace(/```[\s\S]*?```/g, ' ').replace(/`([^`]*)`/g, '$1').replace(/https?:\/\/\S+/g, 'link')
+    .replace(/[#*_>|~\[\]()]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+// Vowel sound -> [how open, how wide (0 = round "oo" .. 1 = flat "ee")]
+const SOUND = { ah: [1, 0.7], eh: [0.6, 0.9], ee: [0.38, 1], oh: [0.75, 0.2], oo: [0.45, 0], uh: [0.6, 0.6], ow: [0.85, 0.3] };
+// English spelling -> vowel sound, longest match first (rough, but far better than one letter)
+const SPELL = [['eau', 'oh'], ['ee', 'ee'], ['ea', 'ee'], ['ie', 'ee'], ['ei', 'eh'], ['ey', 'eh'], ['ai', 'eh'], ['ay', 'eh'],
+  ['oo', 'oo'], ['ew', 'oo'], ['ue', 'oo'], ['ui', 'oo'], ['ou', 'ow'], ['ow', 'oh'], ['oa', 'oh'], ['oe', 'oh'], ['oi', 'oh'], ['oy', 'oh'],
+  ['au', 'ah'], ['aw', 'ah'], ['a', 'ah'], ['e', 'eh'], ['i', 'ee'], ['o', 'oh'], ['u', 'uh'], ['y', 'ee']];
+function vowelSounds(word) {
+  let w = word.toLowerCase().replace(/[^a-z]/g, '');
+  if (w.length > 3 && /[^aeiouy]e$/.test(w)) w = w.slice(0, -1);    // silent final e: "make", "fire"
+  const groups = w.match(/[aeiouy]+/g) || (w ? ['a'] : []);
+  return groups.map((g) => (SPELL.find(([s]) => g.startsWith(s)) || ['', 'uh'])[1]);
+}
+// The text as a timeline of syllables (each with a mouth shape) and pauses (punctuation).
+function plan(text, rate) {
+  const syl = [], pauses = []; let t = 0; const per = 1 / rate;
+  for (const tok of cleanText(text).split(/(\s+|[.,!?;:—–-]+)/)) {
+    if (!tok) continue;
+    if (/^\s+$/.test(tok)) { t += per; continue; }
+    if (/^[.!?]+$/.test(tok)) { pauses.push(t); t += 0.42; continue; }
+    if (/^[,;:—–-]+$/.test(tok)) { pauses.push(t); t += 0.22; continue; }
+    const sounds = vowelSounds(tok);
+    if (!sounds.length) continue;
+    const n = sounds.length, dur = Math.max(0.13 * n, tok.length * per);
+    const lipStart = /^[mbpw]/i.test(tok); // lips pressed (or pursed) before the first vowel
+    sounds.forEach((s, i) => {
+      const [o, w] = SOUND[s];
+      syl.push({ t0: t + (dur / n) * i, d: dur / n, a: o * (0.75 + Math.random() * 0.25), w, press: lipStart && i === 0 });
+    });
+    t += dur;
+  }
+  return { syl, pauses, dur: t };
+}
+function chunks(text, total) {
+  const s = cleanText(text).match(/[^.!?]+[.!?]*/g) || [];
+  const len = s.reduce((a, x) => a + x.length, 0) || 1; let t = 0;
+  return s.map((x) => { const c = { t0: t, text: x.trim() }; t += (x.length / len) * total; return c; });
+}
+
+// ---------- Live audio: any input device ----------
+// A mic, or a loopback device (BlackHole and friends) carrying the system's output, so he can
+// talk along with anything that plays: vmux, a video, another app. Nothing here knows the source.
+const ear = { want: null, ctx: null, an: null, stream: null, td: null, fd: null, floor: 0.003, err: '', heardAt: 0 };
+async function listen(hint) {
+  if (ear.want === hint) return;
+  ear.want = hint;
+  stopListening();
+  if (!hint) return;
+  try {
+    const raw = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+    let stream = await navigator.mediaDevices.getUserMedia({ audio: raw }); // also unlocks device labels
+    fillPicker(true);
+    if (hint !== 'default') {
+      const inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput');
+      const dev = inputs.find((d) => d.label === hint);
+      stream.getTracks().forEach((t) => t.stop());
+      if (!dev) throw new Error(`No audio input matches "${hint}". Inputs: ${inputs.map((d) => d.label).join(', ')}`);
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { ...raw, deviceId: { exact: dev.deviceId } } });
+    }
+    if (ear.want !== hint) { stream.getTracks().forEach((t) => t.stop()); return; } // changed meanwhile
+    const ctx = new AudioContext();
+    const an = ctx.createAnalyser(); an.fftSize = 2048; an.smoothingTimeConstant = 0.25;
+    ctx.createMediaStreamSource(stream).connect(an); // analysed only, never played
+    // If the input goes away (sleep, the device disappearing), open it again shortly.
+    for (const track of stream.getAudioTracks()) track.addEventListener('ended', () => { setTimeout(() => { if (ear.want === hint) { ear.want = null; } }, 1000); });
+    ctx.resume?.();
+    Object.assign(ear, { ctx, an, stream, td: new Float32Array(an.fftSize), fd: new Float32Array(an.frequencyBinCount), err: '' });
+  } catch (e) {
+    ear.err = String(e?.message || e);
+  }
+}
+// The picker lists the audio inputs this machine has (names appear once the mic is allowed).
+// The choice is saved by name as a stored value, so it follows the user to every glass.
+const picker = document.getElementById('device');
+let pickerKey = '';
+async function fillPicker(force) {
+  let inputs = [];
+  try { inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput' && d.deviceId !== 'default'); } catch {}
+  const chosen = stored.inputDevice || '';
+  const key = chosen + '|' + inputs.map((d) => d.label).join('|');
+  if (key === pickerKey && !force) return;
+  pickerKey = key;
+  picker.replaceChildren(new Option('System default input', ''),
+    ...inputs.map((d, i) => new Option(d.label || `Input ${i + 1}`, d.label)));
+  if (chosen && !inputs.some((d) => d.label === chosen)) picker.append(new Option(`${chosen} (not connected)`, chosen));
+  picker.value = chosen;
+}
+picker.onchange = () => glass.store({ inputDevice: picker.value });
+navigator.mediaDevices?.addEventListener?.('devicechange', () => fillPicker(true));
+
+function stopListening() {
+  ear.stream?.getTracks().forEach((t) => t.stop());
+  ear.ctx?.close?.();
+  Object.assign(ear, { ctx: null, an: null, stream: null, err: '' });
+}
+// One reading: how loud (mouth open) and how bright (wide "ee" vs round "oo").
+function hear(gain) {
+  if (!ear.an) return null;
+  ear.an.getFloatTimeDomainData(ear.td);
+  let sum = 0; for (const v of ear.td) sum += v * v;
+  const rms = Math.sqrt(sum / ear.td.length);
+  // An adaptive noise floor: falls quickly to quiet, creeps up slowly under steady noise.
+  ear.floor = rms < ear.floor ? lerp(ear.floor, rms, 0.1) : ear.floor * 1.0006;
+  const gate = ear.floor * 2.2 + 0.0015;
+  const amp = Math.min(1, Math.pow(Math.max(0, rms - gate) * 9 * gain, 0.7));
+  ear.an.getFloatFrequencyData(ear.fd);
+  const hz = ear.ctx.sampleRate / ear.an.fftSize;
+  const band = (lo, hi) => { let s = 0; for (let i = Math.floor(lo / hz); i < Math.ceil(hi / hz); i++) s += Math.pow(10, ear.fd[i] / 10); return s; };
+  // Vowel color from where the second formant sits: energy at 1.7-3.4 kHz vs 1-1.7 kHz.
+  // Measured on synthesized speech: "ee/eh" about +18 dB, "ah" about -3, "oh/oo" about -16.
+  // (The plain spectral centroid gets this backwards: "ee" has a LOW centroid.)
+  const d = 10 * Math.log10((band(1700, 3400) + 1e-12) / (band(1000, 1700) + 1e-12));
+  const ee = Math.max(0, Math.min(1, (d - 5) / 10)), oo = Math.max(0, Math.min(1, (-d - 8) / 10));
+  ear.wide = lerp(ear.wide ?? 0.65, 0.65 + 0.35 * ee - 0.65 * oo, 0.4);
+  ear.jaw = lerp(ear.jaw ?? 1, 1 - 0.45 * ee, 0.4);     // "ee" barely drops the jaw
+  if (amp > 0.04) ear.heardAt = performance.now();
+  return { amp: amp * ear.jaw, raw: amp, wide: ear.wide };
+}
+
+// ---------- Text + audio sync ----------
+// Follows the reply text along the real audio. A cursor into the text's timeline advances only
+// while sound is playing, and re-syncs on what it hears:
+//   - a fresh onset (quiet -> loud) snaps it to the nearest syllable start
+//   - a real pause in the audio jumps it to the next punctuation pause in the text, and the
+//     next onset after that starts the following phrase's first syllable
+// Text that arrives after the audio started picks up where the audio already is.
+const sync = { item: null, t: 0, quietFor: 0, lastAmp: 0, atPause: null, speechStart: 0, lastHeard: 0 };
+function syncText(heard, talking, dt) {
+  const now = performance.now();
+  if (talking && now - sync.lastHeard > 1500) sync.speechStart = now;   // speech began after a long quiet
+  if (talking) sync.lastHeard = now;
+  if (!sync.item && queue.length && talking) {
+    sync.item = queue.shift();
+    sync.t = Math.max(0, (now - sync.speechStart) / 1000 - 0.05);
+    sync.atPause = null;
+  }
+  const it = sync.item;
+  if (!it) return { item: null, t: 0 };
+  const onset = heard.raw > 0.28 && sync.lastAmp < 0.12;
+  sync.lastAmp = heard.raw;
+  if (talking) {
+    sync.quietFor = 0;
+    if (onset && sync.atPause !== null) {
+      const next = it.plan.syl.find((s) => s.t0 > sync.atPause);       // resume at the next phrase
+      if (next) sync.t = next.t0;
+      sync.atPause = null;
+    } else if (onset) {
+      let best = null;
+      for (const s of it.plan.syl) if (Math.abs(s.t0 - sync.t) < 0.16 && (!best || Math.abs(s.t0 - sync.t) < Math.abs(best.t0 - sync.t))) best = s;
+      if (best) sync.t = best.t0;
+    }
+    sync.t += dt;
+  } else {
+    sync.quietFor += dt;
+    if (sync.quietFor > 0.2 && sync.atPause === null) {                 // a real pause, not a gap
+      const p = it.plan.pauses.find((x) => x >= sync.t - 0.2);
+      if (p !== undefined && p - sync.t < 1.2) { sync.t = p; sync.atPause = p; }
+    }
+  }
+  if (sync.t > it.plan.dur + 0.3 || sync.quietFor > 2.5) sync.item = null; // finished (or abandoned)
+  return { item: it, t: sync.t };
+}
+
+// ---------- Fire shader ----------
+const fireCv = document.getElementById('fire');
+const gl = fireCv.getContext('webgl2', { premultipliedAlpha: true, alpha: true, antialias: false });
+const VS = `#version 300 es
+in vec2 a; void main(){ gl_Position = vec4(a, 0., 1.); }`;
+const FS = `#version 300 es
+precision highp float;
+uniform vec2 uRes; uniform float uTime; uniform vec2 uCenter; uniform float uR;
+uniform float uSway; uniform float uLean; uniform float uGlow; uniform float uAlpha; uniform float uFlame;
+uniform vec3 uC0, uC1, uC2, uCore;
+out vec4 o;
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3. - 2. * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y); }
+float fbm(vec2 p){ float a = .5, s = 0.; for (int i = 0; i < 3; i++) { s += a * vnoise(p); p = p * 2.1 + vec2(1.7, 9.2); a *= .5; } return s / 0.875; }
+void main(){
+  vec2 fc = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);
+  vec2 p = (fc - uCenter) / uR; p.y = -p.y;            // body units, y up, 0 = body center
+  float t = floor(uTime * 12.) / 12.;                   // the shape moves "on twos", like the film
+  float up = smoothstep(-0.4, 1.5, p.y);                // 0 in the round body, 1 up in the licks
+  p.x -= uLean * up * 0.8;
+  // uFlame is a clock that runs at the current sway speed (accumulated in JS), so changing the
+  // speed never makes the flames race the way time * speed would.
+  float f = floor(uFlame * 12.) / 12.;
+  vec2 q = vec2(p.x * 1.2, p.y * 0.9 - f * 1.25);
+  float n = fbm(q * 1.3);
+  float n2 = fbm(q * 2.1 + vec2(n * 1.7, -f * 0.5));
+  float wx = p.x + (n2 - .5) * 0.8 * up * uSway + sin(f * 1.3 + p.y * 2.) * 0.08 * up * uSway;
+  // A plump round body with a bubbly rim (lobes all the way round, like the reference)
+  float ang = atan(wx, p.y);
+  float r = length(vec2(wx * (1. + 0.25 * up), p.y > 0. ? p.y * 0.58 : p.y * 0.92));
+  float body = 1. - r;
+  body += (sin(ang * 7. + t * 2.1 + n * 2.5) * 0.04 + sin(ang * 12. - t * 2.7) * 0.018) * (1. - up * 0.5);
+  // ...pulled up into a few tall licking tongues that break off as wisps
+  float tongues = sin(wx * 5.0 + n * 3.4 + sin(t * 0.7) * 0.6) * 0.5 + 0.5;
+  body += up * up * (tongues - 0.4) * 0.7;
+  body -= up * up * n2 * 0.75;
+  body += (n - .5) * 0.08 * (0.3 + up);
+  float aa = max(fwidth(body), 1e-4);
+  float a = smoothstep(-aa, aa * 1.5 + 0.012, body);   // a clean edge, just softened
+  // Color: a smooth glow, hot yellow at the face, orange body, red at the rim and the tips
+  float h = clamp(body * 1.5 - up * 0.45, 0., 1.);
+  vec3 col = mix(uC0, uC1, smoothstep(0.0, 0.32, h));
+  col = mix(col, uC2, smoothstep(0.28, 0.85, h));
+  vec2 fcen = p - vec2(0., 0.02);
+  float core = exp(-dot(fcen * vec2(1.1, 1.4), fcen * vec2(1.1, 1.4)) * 2.4);
+  col = mix(col, uCore, core * 0.7);
+  col = mix(col, uC0, smoothstep(0.5, 1.7, p.y) * 0.55);              // tips run red
+  col *= 0.96 + 0.08 * vnoise(p * 2.4 + vec2(0., -t * 0.6));          // a little living shimmer
+  // Bloom: a warm halo around him
+  float halo = exp(-max(-body, 0.) * 3.2) * 0.42 * uGlow * (1. - a);
+  vec3 hc = mix(uC0, uC1, 0.5);
+  o = vec4(col * a + hc * halo, a + halo * 0.9) * uAlpha;   // he's a little see-through, as in the film
+}`;
+let prog = null, uni = {};
+function initGL() {
+  if (!gl) return;
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(prog);
+  gl.useProgram(prog);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, 'a'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  for (const u of ['uRes', 'uTime', 'uCenter', 'uR', 'uSway', 'uLean', 'uGlow', 'uAlpha', 'uFlame', 'uC0', 'uC1', 'uC2', 'uCore']) uni[u] = gl.getUniformLocation(prog, u);
+}
+initGL();
+// Sleep, a GPU switch or a long minimize can take the GPU context away; rebuild when it's back.
+fireCv.addEventListener('webglcontextlost', (e) => { e.preventDefault(); prog = null; });
+fireCv.addEventListener('webglcontextrestored', () => { try { initGL(); } catch {} });
+
+// ---------- Assets ----------
+const hearthImg = new Image(); hearthImg.src = HEARTH.src;
+// Things hanging in the room, each its own layer cut from the painting (assets/sway.js)
+const swayers = (window.SWAY || []).map((s) => ({ ...s, img: Object.assign(new Image(), { src: s.src }) }));
+
+// ---------- Wind ----------
+// Now and then a soft gust drifts through: it builds over a couple of seconds, holds, and dies
+// away. Everything hanging swings with it from its hook, the gust reaching each one a moment
+// later as it crosses the room, and his flame leans with it.
+const wind = { gust: 0, target: 0, until: 0, next: performance.now() + 4000 }; // a first breath of air soon after he appears
+function updateWind(now, dt) {
+  if (now > wind.next) {
+    wind.target = 0.6 + Math.random() * 0.4;
+    wind.until = now + 3000 + Math.random() * 4000;
+    wind.next = wind.until + 12000 + Math.random() * 25000;
+  }
+  if (now > wind.until) wind.target = 0;
+  wind.gust = lerp(wind.gust, wind.target, 1 - Math.pow(wind.target > wind.gust ? 0.45 : 0.6, dt));
+}
+// How far a thing at horizontal position x (0..1 of the room) is blown right now, in radians
+function windAngle(x, amount, t) {
+  const delay = x * 0.9;                                   // the gust crosses left to right
+  const swing = 0.65 + 0.35 * Math.sin((t - delay) * 3.4 + x * 7);
+  return wind.gust * amount * 0.085 * swing;
+}
+// His heat pushes outward: when he grows (excited, angry) or flares, the hanging things swing
+// away from him, the nearest most. Each hangs on a soft spring, so it swings and settles.
+let heat = 0;
+function updateSwayers(dt, t) {
+  const push = Math.min(1.2, Math.max(0, rig.size + rig.impulse - 1.0) * 3.5);
+  // The push lets go briskly, so the springs (not the push) carry them back: past center, then settle
+  heat = lerp(heat, push, 1 - Math.pow(push > heat ? 0.02 : 0.05, dt));
+  for (const s of swayers) {
+    const away = s.px > LOG.cx ? 1 : -1, near = Math.exp(-Math.abs(s.px - LOG.cx) * 1.4);
+    const target = windAngle(s.px, s.amount, t) + away * heat * s.amount * near * 0.21;
+    // A loose spring: ~0.7 swings a second, lightly damped (overshoots by about a third)
+    s.vel = (s.vel || 0) + ((target - (s.ang || 0)) * 18 - (s.vel || 0) * 1.6) * dt;
+    s.ang = (s.ang || 0) + s.vel * dt;
+  }
+}
+const logImg = new Image(); logImg.src = LOG.src;
+
+// ---------- State ----------
+const bgCv = document.getElementById('bg'), fgCv = document.getElementById('fg');
+const faceCv = document.createElement('canvas'), faceCtx = faceCv.getContext('2d'); // offscreen
+const logCv = document.createElement('canvas'), logCtx = logCv.getContext('2d');    // offscreen
+const FACE_ALPHA = 0.56; // the face lets his fire glow through a little
+const bg = bgCv.getContext('2d'), fg = fgCv.getContext('2d'), sub = document.getElementById('sub'), status = document.getElementById('status');
+let props = null, settings = {}, stored = {}, seen = null, moodSeqSeen = null;
+let mood = 'neutral', moodUntil = 0;
+const queue = []; // { start, plan, chunks }
+const rig = { ...BASE, pal: PAL.normal.map((c) => c.slice()), mouthOpen: 0, mouthWide: 0.75, impulse: 0, shake: 0, squint: 0 };
+let blinkAt = performance.now() + 2500, blinkT = -1;
+let lookX = 0, lookY = 0, lookUntil = 0;
+const embers = [];
+
+function onProps(p) {
+  props = p; settings = p.settings || {}; stored = p.stored || {};
+  fillPicker();
+  const st = p.state || {};
+  if (seen === null) { // first props: adopt the restored state without replaying old speech or cues
+    seen = st.seq || 0; moodSeqSeen = st.moodSeq || 0; mood = st.mood || 'neutral'; B.cueSeen = st.cue?.seq ?? null;
+    return;
+  }
+  if ((st.moodSeq || 0) !== moodSeqSeen) {
+    moodSeqSeen = st.moodSeq; mood = st.mood || 'neutral';
+    moodUntil = st.moodFor ? performance.now() + st.moodFor * 1000 : 0;
+    B.explicitAt = B.quietSince = performance.now();
+    rig.impulse += 0.12;
+  }
+  if (st.cue && st.cue.seq !== B.cueSeen) { B.cueSeen = st.cue.seq; onCue(st.cue.name); }
+  if ((st.seq || 0) === seen) return;
+  seen = st.seq;
+  const sp = st.speech;
+  if (sp && sp.seq === seen) {
+    if (!sp.text) queue.length = 0;
+    else if (!sp.auto || settings.autoSpeak !== false) {
+      const now = performance.now(), last = queue[queue.length - 1];
+      const start = Math.max(now + (sp.auto ? (settings.speechDelay ?? 700) : 0), last ? last.start + last.plan.dur * 1000 : 0);
+      const pl = plan(sp.text, settings.speechRate || 15);
+      queue.push({ start, plan: pl, chunks: chunks(sp.text, pl.dur) });
+    }
+  }
+  const r = st.reaction;
+  if (r && r.seq === seen) react(r.kind);
+}
+
+function react(kind) {
+  if (kind === 'flare') { rig.impulse += 0.65; burst(22); }
+  if (kind === 'sputter') rig.impulse -= 0.5;
+  if (kind === 'sparks') burst(46);
+  if (kind === 'wince') { rig.squint = 1; rig.shake = 1; }
+}
+function burst(n) {
+  for (let i = 0; i < n; i++) embers.push({ x: (Math.random() - 0.5) * 0.6, y: 0.6, vx: (Math.random() - 0.5) * 2.4, vy: 1.4 + Math.random() * 2.6, life: 1, big: Math.random() < 0.35 });
+}
+
+// ---------- Behavior: reactions, little actions, gaze, idle life ----------
+// Character-neutral: what to do comes from the persona (P.cues, P.idle). Layers, strongest first:
+//   a reaction mood (short; "strong" ones beat a mood Claude just set)
+//   the mood Claude set (fades back to resting 45 s after things go quiet, unless --for)
+//   what Claude is doing (P.activity), then the resting mood for how long it's been quiet
+// Actions (yawn, sigh, hop...) and gaze ride on top of whichever mood wins.
+const B = { overlay: null, action: null, gaze: null, quietSince: performance.now(), nextBit: performance.now() + 8000, explicitAt: 0, cueSeen: null };
+function pick(options) {
+  if (!options?.length) return null;
+  const w = options.map((o) => (o ? o.weight ?? 1 : 1));
+  let r = Math.random() * w.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < options.length; i++) { r -= w[i]; if (r <= 0) return options[i]; }
+  return options[options.length - 1];
+}
+function perform(o) {
+  if (!o) return;
+  const now = performance.now();
+  if (o.mood) B.overlay = { mood: o.mood, until: now + (o.for ?? 3) * 1000, strong: !!o.strong };
+  if (o.react) react(o.react);
+  if (o.action && ACTIONS[o.action]) B.action = { name: o.action, start: now, dur: ACTIONS[o.action].dur };
+  if (o.gaze) B.gaze = { mode: o.gaze, until: now + (o.for ?? 2.5) * 1000, side: Math.random() < 0.5 ? -1 : 1 };
+}
+function restingMood(now) {
+  const quiet = (now - B.quietSince) / 1000;
+  let m = 'neutral';
+  for (const [after, name] of P.idle.stages) if (quiet >= after) m = name;
+  return m;
+}
+function onCue(name) {
+  const now = performance.now();
+  const dozing = props?.state?.activity === 'idle' && ['sleepy', 'asleep'].includes(restingMood(now));
+  B.quietSince = now;
+  if (dozing) { perform(pick(P.idle.woken)); setTimeout(() => perform(pick(P.cues[name])), 1300); }
+  else perform(pick(P.cues[name]));
+}
+// Little actions: each shapes the pose over its duration (p: 0..1) and may drive the mouth.
+const ACTIONS = {
+  yawn:    { dur: 2.0, run(p, pose) { const e = Math.pow(Math.sin(Math.PI * p), 1.5); pose.lid = Math.max(pose.lid, 0.6 * e); pose.smileEyes = 0; pose.size += 0.06 * e; return { open: 0.85 * e, wide: 0.15 }; } },
+  sigh:    { dur: 1.6, run(p, pose) { const e = Math.sin(Math.PI * p); pose.size -= 0.16 * e; pose.py += 0.3 * e; pose.sway *= 1 - 0.4 * e; return { open: 0.16 * e, wide: 0.3 }; } },
+  hop:     { dur: 0.7, run(p) { return { dy: -Math.sin(Math.PI * p) * 0.18 }; } },
+  shiver:  { dur: 1.1, run(p, pose) { pose.tremble = Math.max(pose.tremble, 1.2 * (1 - p)); } },
+  hum:     { dur: 2.6, run(p, pose, t) { pose.lid = Math.max(pose.lid, 0.45); pose.smileEyes = Math.max(pose.smileEyes, 0.3); pose.lean += 0.05 * Math.sin(p * Math.PI * 6); return { open: 0.05 + 0.06 * (0.5 + 0.5 * Math.sin(p * Math.PI * 8)), wide: 0.45 }; } },
+  nibble:  { dur: 2.2, run(p, pose) { pose.px = 0; pose.py = 0.75; if (p > 0.82) pose.curve = 0.8; return { open: p < 0.82 ? Math.max(0, Math.sin(p * Math.PI * 7.3)) * 0.5 : 0, wide: 0.6 }; } },
+  stretch: { dur: 1.8, run(p, pose) { const e = Math.sin(Math.PI * p); pose.size += 0.25 * e; pose.lid = Math.max(pose.lid, 0.3 * e); return { open: 0.1 * e, wide: 0.3 }; } },
+  snore:   { dur: 3.2, run(p, pose) { const e = 0.5 - 0.5 * Math.cos(p * Math.PI * 2); pose.size += 0.05 * e; return { open: 0.1 * e, wide: 0.2 }; } },
+};
+// Gaze modes override where the pupils point
+function applyGaze(pose, t, now) {
+  const g = B.gaze;
+  if (!g || now > g.until) { B.gaze = null; return false; }
+  if (g.mode === 'viewer') { pose.px = 0; pose.py = 0; }
+  if (g.mode === 'scan') { pose.px = Math.sin(t * 2.3) * 0.75; pose.py = 0.25; }
+  if (g.mode === 'down') { pose.px = 0; pose.py = 0.65; }
+  if (g.mode === 'up') { pose.px = 0.15 * g.side; pose.py = -0.7; }
+  if (g.mode === 'away') { pose.px = 0.85 * g.side; pose.py = 0.1; }
+  return g.mode !== 'around'; // "around" keeps the quick random glances
+}
+
+// ---------- Helpers ----------
+const lerp = (a, b, k) => a + (b - a) * k;
+const mix3 = (a, b, k) => a.map((v, i) => lerp(v, b[i], k));
+const css = (c, a = 1) => `rgba(${(Math.min(1, c[0]) * 255) | 0},${(Math.min(1, c[1]) * 255) | 0},${(Math.min(1, c[2]) * 255) | 0},${a})`;
+const noise = (t, s) => Math.sin(t * 1.7 + s) * 0.5 + Math.sin(t * 2.9 + s * 1.3) * 0.3 + Math.sin(t * 5.3 + s * 2.1) * 0.2;
+// Self-healing: under GPU memory pressure Chromium can lose a canvas's GPU texture ("non-existent
+// mailbox" in the glass log) and keep compositing a stale, half-drawn copy, so he looks frozen or
+// semi-transparent until something resizes him. So every so often, and whenever he becomes visible
+// again, he resizes his canvases by a pixel for one frame, which gives them fresh textures.
+let refreshAt = performance.now() + 45000, refreshing = false;
+function refreshCanvases() { refreshAt = 0; }
+window.addEventListener('focus', refreshCanvases);
+window.addEventListener('resize', refreshCanvases);
+function fit(cv, c2d, W, H, dpr) {
+  const w = Math.round(W * dpr) + (refreshing ? 1 : 0), h = Math.round(H * dpr);
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  if (c2d) c2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+// Where the painting lands on screen: cover the window, keeping the log in view.
+function stage(W, H) {
+  const s = Math.max(W / HEARTH.w, H / HEARTH.h);
+  const iw = HEARTH.w * s, ih = HEARTH.h * s;
+  const dx = Math.min(0, Math.max(W - iw, W / 2 - LOG.cx * iw));
+  const dy = Math.min(0, Math.max(H - ih, H * 0.68 - (LOG.y + LOG.h / 2) * ih));
+  return { s, dx, dy, iw, ih,
+    log: { x: dx + LOG.x * iw, y: dy + LOG.y * ih, w: LOG.w * iw, h: LOG.h * ih } };
+}
+
+// ---------- Hearth: the painting, dimmed, then lit by him ----------
+function drawHearth(W, H, S, lx, ly, glow) {
+  const c = bg;
+  c.clearRect(0, 0, W, H);
+  if (settings.hearth === false || !hearthImg.complete || !hearthImg.naturalWidth) return;
+  c.drawImage(hearthImg, S.dx, S.dy, S.iw, S.ih);
+  // The hanging things, each turned about its hook by the wind
+  for (const s of swayers) {
+    if (!s.img.complete || !s.img.naturalWidth) continue;
+    const px = S.dx + s.px * S.iw, py = S.dy + s.py * S.ih;
+    c.save();
+    c.translate(px, py); c.rotate(-(s.ang || 0)); c.translate(-px, -py);
+    c.drawImage(s.img, S.dx + s.x * S.iw, S.dy + s.y * S.ih, s.w * S.iw, s.h * S.ih);
+    c.restore();
+  }
+  // The room is dim; he is the light.
+  c.fillStyle = 'rgba(14, 8, 18, 0.42)'; c.fillRect(0, 0, W, H);
+  c.save(); c.globalCompositeOperation = 'lighter';
+  const reach = Math.max(W, H) * 0.7;
+  const g = c.createRadialGradient(lx, ly, 0, lx, ly, reach);
+  g.addColorStop(0, css(rig.pal[1], 0.34 * glow)); g.addColorStop(0.35, css(rig.pal[0], 0.12 * glow)); g.addColorStop(1, 'rgba(0,0,0,0)');
+  c.fillStyle = g; c.fillRect(0, 0, W, H);
+  c.restore();
+  // Vignette
+  const v = c.createRadialGradient(lx, ly, Math.min(W, H) * 0.25, lx, ly, Math.max(W, H) * 0.85);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,0.5)');
+  c.fillStyle = v; c.fillRect(0, 0, W, H);
+}
+
+// ---------- Face ----------
+const LINE = '#3a160a';
+const INK = 0.008; // outline width on the eyes and mouth, as a share of face size (never under 0.8 px)
+const skin = () => mix3(rig.pal[1], rig.pal[2], 0.8);
+// No eyelids: an expression reshapes the eye itself. Start from an oval, then
+//   lid/tilt   flatten the top along a slanted line (angry, grumpy, sleepy, smug, sad),
+//   smileEyes  push the bottom up into an arch (happy),
+//   blink      squash it to a line.
+function eyeShape(x, y, rx, ry, side, open) {
+  const flat = Math.min(1, Math.max(rig.lid, rig.squint * 0.75)); // 1 = shut (asleep)
+  const tilt = rig.tilt * ry * 0.7;
+  const pts = [];
+  for (let i = 0; i < 40; i++) {
+    const a = (i / 40) * Math.PI * 2;
+    const ex = Math.cos(a), ey = Math.sin(a);
+    let px = x + ex * rx, py = y + ey * ry;
+    // Top edge: a straight-ish line, its inner end lower when tilt > 0
+    const towardInner = side < 0 ? (ex + 1) / 2 : (1 - ex) / 2;
+    const topY = y - ry + flat * ry * 2 + (towardInner - 0.5) * 2 * tilt * Math.min(1, flat * 3 + Math.abs(rig.tilt) * 0.4);
+    if (py < topY) py = topY;
+    // Bottom edge: rises in the middle into an arch for a happy eye
+    if (rig.smileEyes > 0.01) {
+      const botY = y + ry - rig.smileEyes * ry * 1.25 * (1 - ex * ex * 0.85);
+      if (py > botY) py = botY;
+    }
+    pts.push([px, py]);
+  }
+  // Blink: squash toward the eye's lower middle
+  const mid = y + ry * 0.35;
+  for (const p of pts) p[1] = mid + (p[1] - mid) * open;
+  return pts;
+}
+function drawEye(x, y, S, side, open) {
+  const c = faceCtx;
+  // Round by default; `tall` stretches them into upright ovals (surprise, alarm)
+  const rx = S * 0.16 * rig.eye, ry = rx * rig.tall;
+  const pts = eyeShape(x, y, rx, ry, side, open);
+  let top = Infinity, bot = -Infinity;
+  for (const [, py] of pts) { top = Math.min(top, py); bot = Math.max(bot, py); }
+  const path = () => { c.beginPath(); pts.forEach(([px, py], i) => (i ? c.lineTo(px, py) : c.moveTo(px, py))); c.closePath(); };
+  c.save();
+  c.lineJoin = 'round'; c.lineCap = 'round';
+  c.strokeStyle = LINE; c.lineWidth = Math.max(0.8, S * INK);
+  if (bot - top < S * 0.025) { // closed: just a line
+    c.beginPath(); c.moveTo(x - rx, (top + bot) / 2); c.quadraticCurveTo(x, (top + bot) / 2 + ry * 0.12, x + rx, (top + bot) / 2); c.stroke();
+    c.restore(); return;
+  }
+  path(); c.fillStyle = '#f7ecd0'; c.fill();
+  c.save(); path(); c.clip();
+  // Pupil: a plain black dot, kept inside whatever shape the eye has
+  const pr = S * 0.052 * rig.pupil;
+  const gx = Math.max(-1, Math.min(1, rig.px + lookX)), gy = Math.max(-1, Math.min(1, rig.py + lookY));
+  const midY = (top + bot) / 2, halfH = Math.max(0, (bot - top) / 2 - pr);
+  const ppx = x + gx * (rx - pr) * 0.8, ppy = midY + gy * halfH * 0.7;
+  c.fillStyle = '#120804'; c.beginPath(); c.ellipse(ppx, ppy, pr, pr * 1.12, 0, 0, Math.PI * 2); c.fill();
+  c.restore();
+  path(); c.stroke(); // thin ink outline, as in the film
+  c.restore();
+}
+
+// The mouth is one smooth closed shape (a superellipse) driven by three numbers, so every
+// in-between is clean:
+//   open   0 = a closed band .. 1 = jaw dropped (opens mostly downward)
+//   wide   0 = round "oo/oh" (narrow, oval) .. 1 = flat "ee/ah" (wide, rounded-rectangle)
+//   curve  the mood: ends bend up (smile) or down (frown), less so as the jaw drops
+// Closed, the ends are a little fatter than the middle, like the film's band. One flat red,
+// thin ink outline.
+function drawMouth(cx, y, S, t) {
+  const c = faceCtx, open = rig.mouthOpen, wide = rig.mouthWide, curve = rig.curve;
+  const hw = S * 0.33 * lerp(0.5, 1, wide) * (1 - 0.08 * open);
+  const hh = S * (0.026 + 0.27 * open);
+  const n = lerp(2.1, 3.4, wide);                       // ellipse .. rounded rectangle
+  const closedness = 1 - Math.min(1, open * 4);
+  const N = 72, pts = [];
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * Math.PI * 2, cs = Math.cos(a), sn = Math.sin(a);
+    const xn = Math.sign(cs) * Math.pow(Math.abs(cs), 2 / n);
+    let yn = Math.sign(sn) * Math.pow(Math.abs(sn), 2 / n);
+    yn *= sn < 0 ? 0.62 : 1.38;                          // top lip stays, jaw drops
+    yn *= 1 + 0.75 * closedness * Math.pow(Math.abs(xn), 4); // fat ends when closed
+    const bend = -curve * S * 0.1 * xn * xn * (1 - 0.55 * open);
+    const wobble = S * 0.005 * Math.sin(xn * 3.1 + 0.7);
+    pts.push([cx + xn * hw, y + yn * hh + bend + wobble]);
+  }
+  const outline = () => { c.beginPath(); pts.forEach(([x, yy], i) => (i ? c.lineTo(x, yy) : c.moveTo(x, yy))); c.closePath(); };
+  c.save();
+  c.lineJoin = 'round';
+  outline(); c.fillStyle = '#d93c1a'; c.fill();
+  if (rig.teeth > 0.3 && open > 0.12) {
+    c.save(); outline(); c.clip();
+    c.fillStyle = '#fff2d6';
+    for (let i = -2; i <= 2; i++) {
+      const tx = cx + i * hw * 0.28, s = hw * 0.08, ty = y - hh * 0.62 - curve * S * 0.1 * Math.pow(i * 0.28, 2);
+      c.beginPath(); c.moveTo(tx - s, ty - 2); c.lineTo(tx + s, ty - 2); c.lineTo(tx, ty + S * 0.07 * rig.teeth); c.closePath(); c.fill();
+    }
+    c.restore();
+  }
+  outline(); c.strokeStyle = LINE; c.lineWidth = Math.max(0.8, S * INK); c.stroke();
+  c.restore();
+}
+
+// ---------- Arms: little flame arms reaching round the log ----------
+function drawArms(cx, logTop, logH, R, t, talking, lift = 0, faceX = cx, faceY = logTop - R) { // lift: his body's bounce (px, up < 0)
+  const c = fg;
+  for (const side of [-1, 1]) {
+    const pat = talking ? Math.max(0, Math.sin(t * 7 + (side > 0 ? 0 : 1.6))) * 0.04 : 0;
+    const reach = lerp(0.56, 0.36, rig.hug);                 // tighter hug -> hands closer together
+    // Shoulder, low on his side behind the log; it rides along when he bounces, the paws keep
+    // their grip. Short and stubby, like the little arms in the reference drawings.
+    const sx = cx + side * R * 0.6, sy = logTop - R * 0.08 + lift;
+    const hx = cx + side * R * reach, hy = logTop + logH * (0.22 - pat);
+    const kx = cx + side * R * 0.7, ky = logTop + logH * 0.04;  // the bend: a gentle bow, not a hook
+    // A tapered lobe of his own flame: wide where it leaves his body, narrowing to a round paw.
+    const N = 14, w0 = R * 0.28, w1 = R * 0.2, pts = [];
+    for (let i = 0; i <= N; i++) {
+      const u = i / N, a1 = 1 - u;
+      const x = a1 * a1 * sx + 2 * a1 * u * kx + u * u * hx, y = a1 * a1 * sy + 2 * a1 * u * ky + u * u * hy;
+      const dx = 2 * a1 * (kx - sx) + 2 * u * (hx - kx), dy = 2 * a1 * (ky - sy) + 2 * u * (hy - ky);
+      const len = Math.hypot(dx, dy) || 1, w = lerp(w0, w1, u) / 2;
+      pts.push([x, y, -dy / len * w, dx / len * w]);
+    }
+    c.save();
+    c.beginPath();
+    pts.forEach(([x, y, nx, ny], i) => (i ? c.lineTo(x + nx, y + ny) : c.moveTo(x + nx, y + ny)));
+    const [ex, ey] = pts[N];
+    // Round stub end, going the long way round past the tip (same for both arms)
+    c.arc(ex, ey, w1 / 2, Math.atan2(pts[N][3], pts[N][2]), Math.atan2(-pts[N][3], -pts[N][2]), true);
+    for (let i = N; i >= 0; i--) { const [x, y, nx, ny] = pts[i]; c.lineTo(x - nx, y - ny); }
+    // Round root too (round the back of the shoulder), so there's no flat cut anywhere
+    const [rx0, ry0, rnx, rny] = pts[0];
+    c.arc(rx0, ry0, w0 / 2, Math.atan2(-rny, -rnx), Math.atan2(rny, rnx), true);
+    c.closePath();
+    // Grows out of his body: a circular fade around his face, so whatever part of the arm is
+    // nearest his face (the root) melts into him and everything farther out stays solid.
+    const dShoulder = Math.hypot(sx - faceX, sy - faceY), dHand = Math.hypot(hx - faceX, hy - faceY);
+    const r0 = Math.max(0, dShoulder - w0 * 0.6), r1 = Math.max(dHand, dShoulder + w0);
+    const g = c.createRadialGradient(faceX, faceY, r0, faceX, faceY, r1);
+    const solid = Math.min(0.95, (w0 * 1.0) / (r1 - r0));                 // solid just past the shoulder
+    // His own colors: warm yellow-orange where it leaves his body (like his body there), deepening
+    // to orange at the paw
+    const near = mix3(rig.pal[1], rig.pal[2], 0.55), far = mix3(rig.pal[1], rig.pal[0], 0.2);
+    g.addColorStop(0, css(near, 0)); g.addColorStop(solid, css(near)); g.addColorStop(1, css(far));
+    c.shadowColor = css(rig.pal[1], 0.9); c.shadowBlur = R * 0.18;
+    c.filter = `blur(${Math.max(0.8, R * 0.011).toFixed(1)}px)`; // a soft, glowing edge like his body's
+    c.fillStyle = g; c.fill();
+    c.filter = 'none';
+    c.shadowBlur = 0;
+    c.restore();
+  }
+}
+
+// ---------- Frame ----------
+let last = performance.now();
+let flameClock = 0; // advances at the current sway speed
+// The loop. requestAnimationFrame normally drives it, but a frame inside the glass can have its
+// animation callbacks paused (after sleep, minimize, or being hidden) and not resumed. A watchdog
+// notices when frames stop and keeps him going on a timer until animation callbacks come back.
+let lastRafAt = performance.now(), rafPending = false;
+function schedule() { if (!rafPending) { rafPending = true; requestAnimationFrame((now) => { rafPending = false; lastRafAt = performance.now(); frame(now); }); } }
+setInterval(() => {
+  // Callbacks stalled while he's visible: drive at ~30 fps. (Hidden: draw nothing, nobody can see.)
+  if (!document.hidden && performance.now() - lastRafAt > 400) frame(performance.now());
+  if (ear.ctx?.state === 'suspended') ear.ctx.resume?.();      // audio paused by sleep: wake it
+}, 33);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { rafPending = false; refreshCanvases(); schedule(); } });
+
+function frame(now) {
+  schedule();
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  const t = now / 1000;
+  const dpr = window.devicePixelRatio || 1;
+  const W = innerWidth, H = innerHeight;
+  if (!W || !H) return;
+  // GPU memory: four full-window canvases at Retina resolution can exhaust the compositor's tile
+  // memory, and then it silently stops repainting (he looks frozen). The painting and the soft
+  // fire don't need full resolution; the face and the log in front do.
+  const fireDpr = Math.min(dpr, 1.25);
+  refreshing = !refreshing && now >= refreshAt;          // one frame a pixel wider, then back
+  if (refreshing) refreshAt = now + 45000;
+  fit(bgCv, bg, W, H, Math.min(dpr, 1)); fit(fgCv, fg, W, H, Math.min(dpr, 2)); fit(fireCv, null, W, H, fireDpr);
+
+  // Pose: which mood wins right now (see Behavior), then actions and gaze on top
+  if (moodUntil && now > moodUntil) { mood = 'neutral'; moodUntil = 0; }
+  const st = props?.state || {};
+  const busy = (st.activity && st.activity !== 'idle') || queue.length > 0 || now - ear.heardAt < 1000;
+  if (busy) B.quietSince = now;
+  const ov = B.overlay && now < B.overlay.until ? B.overlay : null;
+  const explicitActive = mood !== 'neutral' && (moodUntil > 0 || now - B.quietSince < 45000);
+  const explicitFresh = now - B.explicitAt < 12000;
+  const resting = restingMood(now);
+  const shown = ov && (ov.strong || !explicitActive || !explicitFresh) ? ov.mood
+    : explicitActive ? mood
+    : st.activity && st.activity !== 'idle' ? (P.activity[st.activity] || 'neutral')
+    : resting;
+  const pose = { ...BASE, ...(MOODS[shown] || {}) };
+  updateWind(now, dt);
+  pose.lean += windAngle(LOG.cx, 1, t) * 3;                // his flame leans with the gust (to the right)
+  // Idle life: every so often, a little something that fits how long it's been quiet
+  if (!busy && !B.action && !ov && now > B.nextBit) {
+    perform(pick(P.idle.bits[resting] || P.idle.bits.neutral));
+    B.nextBit = now + (P.idle.every[0] + Math.random() * (P.idle.every[1] - P.idle.every[0])) * 1000;
+  }
+  let act = null;
+  if (B.action) {
+    const p = (now - B.action.start) / 1000 / B.action.dur;
+    if (p >= 1) B.action = null; else act = ACTIONS[B.action.name].run(p, pose, t) || {};
+  }
+  const gazeHeld = applyGaze(pose, t, now);
+  const k = 1 - Math.pow(0.002, dt);
+  pose.size *= P.scale ?? 1;
+  for (const key of EASED) rig[key] = lerp(rig[key], pose[key], k);
+  const pal = PAL[pose.heat] || PAL.normal;
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) rig.pal[i][j] = lerp(rig.pal[i][j], pal[i][j], k * 0.8);
+  rig.impulse = lerp(rig.impulse, 0, 1 - Math.pow(0.08, dt));
+  rig.shake = Math.max(0, rig.shake - dt * 2.2);
+  rig.squint = Math.max(0, rig.squint - dt * 1.6);
+
+  // Speech layer. Three sources:
+  //   text   the reply text on an estimated timeline (no audio)
+  //   input  an audio input alone: loudness opens the jaw, the spectrum picks the vowel shape
+  //   both   audio for timing and loudness, the text for which vowel it is (see syncText)
+  let amp = 0, wide = rig.wide, press = false, line = '';
+  const mode = settings.audioSource || 'text';
+  const useAudio = mode !== 'text';
+  picker.classList.toggle('on', useAudio);
+  listen(useAudio ? (stored.inputDevice || 'default') : '');
+  const heard = useAudio ? hear(settings.audioGain ?? 1) : null;
+  status.textContent = useAudio && ear.err ? ear.err : '';
+  let talking = false, syl = null, sylT = 0, item = null;
+  if (mode === 'text') {
+    while (queue.length && now > queue[0].start + queue[0].plan.dur * 1000 + 300) queue.shift();
+    item = queue[0];
+    if (item && now >= item.start) { talking = true; sylT = (now - item.start) / 1000; }
+  } else if (heard) {
+    talking = now - ear.heardAt < 160; // hold through the tiny gaps inside a word
+    amp = heard.amp; wide = heard.wide;
+    if (mode === 'both') ({ item, t: sylT } = syncText(heard, talking, dt));
+  }
+  if (item && (talking || mode === 'text')) {
+    syl = item.plan.syl.find((s) => sylT >= s.t0 && sylT < s.t0 + s.d);
+    for (const c of item.chunks) if (sylT >= c.t0) line = c.text;
+  }
+  if (syl) {
+    const ph = (sylT - syl.t0) / syl.d;
+    press = syl.press && ph < 0.25;
+    wide = syl.w;
+    if (mode === 'text') amp = press ? 0 : syl.a * Math.pow(Math.sin(Math.PI * ph), 0.65);
+    else amp = press ? 0 : Math.min(1, heard.raw * syl.a * 1.25); // real loudness, the text's jaw size
+  }
+  // Mouth follows speech like a drawn jaw: snaps open, snaps nearly as fast back shut, presses on m/b/p
+  if (!talking && act?.wide !== undefined) wide = act.wide;
+  const targetOpen = talking ? Math.min(1, rig.open * 0.3 + amp * 0.85) : act?.open ?? rig.open;
+  const rate = press ? 1e-7 : targetOpen > rig.mouthOpen ? 1e-6 : 3e-6;
+  rig.mouthOpen = lerp(rig.mouthOpen, targetOpen, 1 - Math.pow(rate, dt));
+  rig.mouthWide = lerp(rig.mouthWide, talking || act?.wide !== undefined ? wide : rig.wide, 1 - Math.pow(1e-4, dt));
+  sub.textContent = line; sub.classList.toggle('on', !!(settings.subtitles && line));
+
+  // Blinks and glances
+  if (now > blinkAt && blinkT < 0) blinkT = 0;
+  let open = 1;
+  if (blinkT >= 0) { blinkT += dt; open = Math.abs(1 - blinkT / 0.07); if (blinkT > 0.14) { blinkT = -1; blinkAt = now + 2000 + Math.random() * 4500; open = 1; } }
+  if (gazeHeld) { lookX = lookY = 0; }
+  else if (now > lookUntil) {
+    const around = B.gaze?.mode === 'around';
+    const idle = around || (shown === 'neutral' && st.activity === 'idle');
+    lookX = idle && Math.random() < 0.7 ? (Math.random() - 0.5) * 1.2 : 0; lookY = idle ? (Math.random() - 0.5) * 0.5 : 0;
+    lookUntil = now + (around ? 350 + Math.random() * 500 : 1400 + Math.random() * 3200);
+  }
+  if (shown === 'asleep') open = 1; // no blinking in his sleep (the lids are already shut)
+
+  // Layout: he sits behind the log, centered on it
+  const S = stage(W, H);
+  const L = S.log;
+  const logCx = S.dx + LOG.cx * S.iw, logTop = S.dy + LOG.topY * S.ih;
+  // His size and seat come from the log itself in the painting, not from how log.png is cropped
+  const logW = LOG.span * S.iw, logH = LOG.thick * S.ih;
+  const R0 = logW * 0.44;
+  const size = Math.max(0.35, rig.size + rig.impulse + amp * 0.05 + 0.025 * Math.sin(t * 1.9));
+  const R = R0 * size;
+  const jit = (rig.tremble * 0.014 + rig.shake * 0.035) * R0;
+  const cx = logCx + (Math.random() - 0.5) * jit + noise(t * 0.6, 3) * R0 * 0.02;
+  const cy = logTop + logH * 0.15 - R * 0.62 + (Math.random() - 0.5) * jit + (act?.dy ?? 0) * R0;
+  const glow = 0.55 + 0.45 * size + 0.12 * noise(t * 4, 9);
+
+  updateSwayers(dt, t);
+  drawHearth(W, H, S, cx, cy, glow);
+
+  // Body
+  if (gl && prog) {
+    gl.viewport(0, 0, fireCv.width, fireCv.height);
+    gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.uniform2f(uni.uRes, fireCv.width, fireCv.height);
+    gl.uniform1f(uni.uTime, t);
+    gl.uniform2f(uni.uCenter, cx * fireDpr, cy * fireDpr);
+    gl.uniform1f(uni.uR, R * fireDpr);
+    gl.uniform1f(uni.uSway, rig.sway);
+    flameClock += dt * rig.sway;
+    gl.uniform1f(uni.uFlame, flameClock);
+    gl.uniform1f(uni.uLean, rig.lean);
+    gl.uniform1f(uni.uGlow, glow);
+    gl.uniform1f(uni.uAlpha, BODY_ALPHA);
+    gl.uniform3fv(uni.uC0, rig.pal[0]); gl.uniform3fv(uni.uC1, rig.pal[1]); gl.uniform3fv(uni.uC2, rig.pal[2]);
+    gl.uniform3fv(uni.uCore, mix3(rig.pal[2], CORE_LIGHT, 0.55));
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  // Face, then the log in front of him, then his arms round it
+  fg.clearRect(0, 0, W, H);
+  const F = R0 * Math.pow(size, 0.55);
+  const faceX = cx + rig.lean * R * 0.3, eyeY = cy - R * 0.06, gap = F * 0.4, mouthY = cy + R * 0.24;
+  // The face is painted opaque on a small offscreen canvas around it, then laid onto the front
+  // layer at FACE_ALPHA, so overlapping strokes don't double up (and no extra full-window layer)
+  const fs = Math.min(dpr, 2), ox = faceX - F * 0.9, oy = eyeY - F * 0.6;
+  const fw = Math.ceil(F * 1.8), fh = Math.ceil(mouthY - oy + F * 0.75);
+  if (faceCv.width !== Math.ceil(fw * fs) || faceCv.height !== Math.ceil(fh * fs)) { faceCv.width = Math.ceil(fw * fs); faceCv.height = Math.ceil(fh * fs); }
+  faceCtx.setTransform(fs, 0, 0, fs, -ox * fs, -oy * fs);
+  faceCtx.clearRect(ox, oy, fw, fh);
+  drawEye(faceX - gap, eyeY, F, -1, open);
+  drawEye(faceX + gap, eyeY, F, 1, open);
+  drawMouth(faceX, mouthY, F, t);
+  fg.save(); fg.globalAlpha = FACE_ALPHA; fg.drawImage(faceCv, ox, oy, fw, fh); fg.restore();
+  if (logImg.complete && logImg.naturalWidth) {
+    // The log, lit by him. Lit on its own small canvas first, so the light touches only the log
+    // (on the front layer it would also tint his face where it dips into the log's area).
+    const ls = Math.min(dpr, 2), lw = Math.ceil(L.w * ls), lh = Math.ceil(L.h * ls);
+    if (logCv.width !== lw || logCv.height !== lh) { logCv.width = lw; logCv.height = lh; }
+    logCtx.setTransform(ls, 0, 0, ls, -L.x * ls, -L.y * ls);
+    logCtx.globalCompositeOperation = 'source-over';
+    logCtx.clearRect(L.x, L.y, L.w, L.h);
+    logCtx.drawImage(logImg, L.x, L.y, L.w, L.h);
+    logCtx.globalCompositeOperation = 'source-atop';
+    const lg = logCtx.createRadialGradient(cx, logTop, 0, cx, logTop, logW * 0.6);
+    lg.addColorStop(0, css(rig.pal[1], 0.35 * glow)); lg.addColorStop(1, 'rgba(0,0,0,0)');
+    logCtx.fillStyle = lg; logCtx.fillRect(L.x, L.y, L.w, L.h);
+    fg.drawImage(logCv, L.x, L.y, L.w, L.h);
+  }
+  fg.globalAlpha = Math.min(1, BODY_ALPHA + 0.1); // arms a touch more solid than his body: they're in front of the log
+  drawArms(cx, logTop, logH, R0 * Math.pow(size, 0.4), t, talking, (act?.dy ?? 0) * R0, faceX, eyeY);
+  fg.globalAlpha = 1;
+
+  if (Math.random() < rig.embers * dt * 12) embers.push({ x: (Math.random() - 0.5) * 0.8, y: 1.3, vx: (Math.random() - 0.5) * 0.5, vy: 0.7 + Math.random() * 0.9, life: 1, big: false });
+  for (let i = embers.length - 1; i >= 0; i--) {
+    const e = embers[i];
+    e.x += e.vx * dt + Math.sin(t * 3 + i) * 0.004; e.y += e.vy * dt; e.vy -= 0.25 * dt; e.life -= dt * 0.6;
+    if (e.life <= 0 || embers.length > 180) { embers.splice(i, 1); continue; }
+    const ex = cx + e.x * R, ey = cy - e.y * R;
+    fg.fillStyle = css(rig.pal[2], e.life); fg.shadowColor = css(rig.pal[1], e.life); fg.shadowBlur = 6;
+    fg.beginPath(); fg.arc(ex, ey, (e.big ? 2.6 : 1.5) * (0.5 + e.life * 0.5), 0, Math.PI * 2); fg.fill();
+  }
+  fg.shadowBlur = 0;
+}
+schedule();
+glass.onState(onProps);
+</script>
+</body>
+</html>

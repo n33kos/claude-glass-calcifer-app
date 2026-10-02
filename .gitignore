@@ -1,0 +1,4 @@
+.DS_Store
+__pycache__/
+# built locally by extras/macos-system-audio/build.sh
+extras/macos-system-audio/calcifer-system-audio
