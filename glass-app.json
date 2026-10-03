@@ -25,7 +25,7 @@
   },
   "settings": {
     "persona": { "type": "bool", "label": "Claude speaks as Calcifer", "default": true },
-    "micDevice": { "type": "text", "label": "Your microphone: its name or part of it, e.g. AirPods (blank: the default mic, skipping loopback devices)", "default": "" },
+    "micDevice": { "type": "audioinput", "label": "Your microphone (Automatic: the default mic, skipping loopback and virtual devices)", "default": "" },
     "audioSource": { "type": "enum", "label": "Lip sync from", "default": "text", "options": ["text", "input", "both", "feed"] },
     "feedUrl": { "type": "text", "label": "Speech feed URL (feed mode)", "default": "http://localhost:3100" },
     "feedSession": { "type": "text", "label": "Speech feed session id (blank: this project)", "default": "" },
