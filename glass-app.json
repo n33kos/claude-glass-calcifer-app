@@ -14,7 +14,7 @@
     "mic": { "usage": "mic --mode <off|wake|open>", "help": "The user's mic: off, wake (he listens for his name), or open (a conversation)" },
     "mute": { "usage": "mute --on <true|false>", "help": "Mute or unmute his voice (he still mouths the words)" }
   },
-  "permissions": { "microphone": true, "storage": true, "network": ["http://localhost:3100", "ws://localhost:3100", "http://localhost:8100"] },
+  "permissions": { "microphone": true, "storage": true, "network": ["http://localhost:3100", "ws://localhost:3100", "http://localhost:8100", "http://localhost:8101"] },
   "stored": {
     "mic": { "scope": "project", "default": "off" },
     "muted": { "scope": "global", "default": false },
@@ -26,6 +26,9 @@
   "settings": {
     "persona": { "type": "bool", "label": "Claude speaks as Calcifer", "default": true },
     "micDevice": { "type": "audioinput", "label": "Your microphone (Automatic: the default mic, skipping loopback and virtual devices)", "default": "" },
+    "acks": { "type": "bool", "label": "Answer out loud when called (\"mm-hm?\") and when he takes a request (\"on it\")", "default": true },
+    "ackVoice": { "type": "text", "label": "Kokoro voice for those quick replies (match vmux's KOKORO_VOICE)", "default": "am_calcifer" },
+    "ackUrl": { "type": "text", "label": "Kokoro URL for the quick replies", "default": "http://localhost:8101/v1" },
     "audioSource": { "type": "enum", "label": "Lip sync from", "default": "text", "options": ["text", "input", "both", "feed"] },
     "feedUrl": { "type": "text", "label": "Speech feed URL (feed mode)", "default": "http://localhost:3100" },
     "feedSession": { "type": "text", "label": "Speech feed session id (blank: this project)", "default": "" },

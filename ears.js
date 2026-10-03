@@ -164,6 +164,8 @@ function onBlock(x, rate) {
 // his name ("Calcifer... run the tests") would otherwise lose what came next while the mic room
 // is still opening. So after his name alone, the next few seconds of speech are sent as text.
 const FOLLOW_MS = 5000;
+// What he says himself when called (view.html ACK_LINES), as Whisper might write it
+const OWN_REPLY = /^(?:\W*(?:m+-?h?m+|uh-?huh|yeah|what'?s up|h+m+|i'?m listening|on it|got it|one sec(?:ond)?|okay))+\b\W*/i;
 let chain = Promise.resolve();
 // What he heard and what he made of it, the last 25 clips (stored as `earLog`, for tuning his ear).
 const earLog = [];
@@ -188,9 +190,12 @@ function heard(clip) {
         log(clip, text, m.rest ? `name${m.loose ? ' (loose)' : ''} + "${m.rest}"` : `name${m.loose ? ' (loose)' : ''} alone: listening on`);
         ears.onName?.(m.rest, text);
       } else if (clip.startedAt < conv.followUntil && !/^\W*(thank you|thanks|you)\W*$/i.test(text)) {
+        // His own quick reply ("mm-hm?", "what's up?") can be in the clip ahead of the request
+        const said = text.replace(OWN_REPLY, '').trim();
+        if (!said) return log(clip, text, 'his own quick reply: ignored');
         conv.followUntil = 0;
-        log(clip, text, 'follow-up: sent');
-        ears.onFollow?.(text);
+        log(clip, text, `follow-up: sent "${said}"`);
+        ears.onFollow?.(said);
       } else log(clip, text, 'not his name');
     } catch (e) { ear.err = `Wake listener: ${e?.message || e}`; log(clip, '', `error: ${e?.message || e}`); }
     finally { ear.transcribing--; }

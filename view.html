@@ -6,8 +6,9 @@
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
   canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
-  #sub { position: fixed; left: 50%; bottom: 5%; transform: translateX(-50%); max-width: 86%;
-    text-align: center; font: 500 15px/1.35 var(--font-sans, system-ui); color: #ffe9c4;
+  /* Big enough to read across a room (cast to a TV); lines are kept short (subtitleChunks), so it never shrinks */
+  #sub { position: fixed; left: 50%; bottom: 4%; transform: translateX(-50%); width: min(92%, 34em);
+    text-align: center; font: 600 clamp(18px, 3.4vmin, 40px)/1.3 var(--font-sans, system-ui); color: #ffe9c4; text-wrap: balance;
     text-shadow: 0 1px 3px #000, 0 0 12px rgba(0,0,0,.8); pointer-events: none; opacity: 0; transition: opacity .25s; }
   #sub.on { opacity: 1; }
   /* Audio input picker: only in "input" mode, and only visible while hovering the window. */
@@ -28,7 +29,7 @@
 <script src="glass-app://sdk/glass-app.js"></script>
 <script src="persona/calcifer.js?v=3"></script><!-- bump ?v= when the persona changes -->
 <script src="lipsync.js?v=1"></script><!-- bump ?v= when lip sync changes -->
-<script src="ears.js?v=10"></script><!-- bump ?v= when the ears change -->
+<script src="ears.js?v=11"></script><!-- bump ?v= when the ears change -->
 <script src="assets/sway.js?v=8"></script><!-- bump ?v= when the scene's images change -->
 
 <script>
@@ -93,10 +94,13 @@ function plan(text, rate) {
   }
   return { syl, pauses, dur: t };
 }
+// Subtitle lines for the estimated timeline (text mode): short lines (shortLines, below), each
+// starting at its share of the time by length.
 function chunks(text, total) {
-  const s = cleanText(text).match(/[^.!?]+[.!?]*/g) || [];
-  const len = s.reduce((a, x) => a + x.length, 0) || 1; let t = 0;
-  return s.map((x) => { const c = { t0: t, text: x.trim() }; t += (x.length / len) * total; return c; });
+  const words = cleanText(text).split(' ').filter(Boolean);
+  const len = words.reduce((a, w) => a + w.length + 1, 0) || 1; let at = 0;
+  const timed = words.map((w) => { const x = { text: w, start: (at / len) * total }; at += w.length + 1; return x; });
+  return shortLines(timed).map((l) => ({ t0: l.start, text: l.text }));
 }
 
 // ---------- Live audio: any input device ----------
@@ -275,7 +279,9 @@ window.EARS.onCommand = (cmd) => {
 window.EARS.onName = (rest) => {
   const cmd = window.EARS.voiceCommand(rest);
   if (cmd) return window.EARS.onCommand(cmd);
-  if (/[a-z]/i.test(rest.replace(/\b(please|hi|hey|hello|um|uh|yes|yeah|okay|ok)\b/gi, ''))) feed.client?.sendText(rest);
+  const asks = /[a-z]/i.test(rest.replace(/\b(please|hi|hey|hello|um|uh|yes|yeah|okay|ok)\b/gi, ''));
+  if (asks) feed.client?.sendText(rest);
+  playAck(asks ? 'working' : 'wake');
   setPosture('open');
 };
 // What you said right after his name, before the conversation's mic was open
@@ -283,22 +289,86 @@ window.EARS.onFollow = (text) => {
   const cmd = window.EARS.voiceCommand(text);
   if (cmd) return window.EARS.onCommand(cmd);
   feed.client?.sendText(text);
+  playAck('working');
 };
+
+// ---------- Quick replies: "mm-hm?" when called, "on it" when he takes a request ----------
+// Said in Claude's own voice without going through Claude: a few short clips made once by the
+// local Kokoro (the TTS vmux uses) and kept, so one plays the instant he hears his name while you
+// keep talking. His ear strips these phrases from what it hears (ears.js), so they never echo
+// back as a request.
+const ACK_LINES = { wake: ['Mm-hm?', 'Yeah?', "What's up?", 'Hm?', "I'm listening."], working: ['On it.', 'Got it.', 'One sec.', 'Okay.'] };
+const ack = { voice: null, ctx: null, clips: {}, an: null, buf: null, until: 0, line: '' };
+async function loadAcks(voice) {
+  if (ack.voice === voice) return;
+  ack.voice = voice; ack.clips = {};
+  ack.ctx ??= new AudioContext();
+  ack.an ??= Object.assign(ack.ctx.createAnalyser(), { fftSize: 1024 });
+  if (!ack.gain) { ack.gain = ack.ctx.createGain(); ack.an.connect(ack.gain); ack.gain.connect(ack.ctx.destination); ack.buf = new Float32Array(ack.an.fftSize); }
+  const url = (settings.ackUrl || 'http://localhost:8101/v1').replace(/\/+$/, '') + '/audio/speech';
+  for (const [kind, lines] of Object.entries(ACK_LINES)) for (const text of lines) {
+    try {
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'tts-1', input: text, voice, response_format: 'wav', speed: 1.0 }) });
+      if (!res.ok || ack.voice !== voice) continue;
+      const audio = await ack.ctx.decodeAudioData(await res.arrayBuffer());
+      (ack.clips[kind] ??= []).push({ text, audio });
+    } catch { /* Kokoro not running: he just doesn't answer out loud */ }
+  }
+}
+function playAck(kind) {
+  if (settings.acks === false) return;
+  const list = ack.clips[kind];
+  if (!list?.length) return;
+  const { text, audio } = list[(Math.random() * list.length) | 0];
+  ack.ctx.resume?.();
+  ack.gain.gain.value = stored.muted ? 0 : 1;            // muted: he still mouths it
+  const src = ack.ctx.createBufferSource(); src.buffer = audio; src.connect(ack.an); src.start();
+  ack.until = performance.now() + audio.duration * 1000 + 80; ack.line = text;
+}
+// While a quick reply plays: how loud it is now (0..1), else null
+function ackLevel() {
+  if (performance.now() > ack.until) return null;
+  ack.an.getFloatTimeDomainData(ack.buf);
+  let s = 0; for (const v of ack.buf) s += v * v;
+  return Math.min(1, Math.sqrt(s / ack.buf.length) * 7);
+}
 window.EARS.onLog = (earLog) => glass.store({ earLog });
 
 // Browsers may hold audio until a gesture; any click on him resumes it.
 addEventListener('pointerdown', () => feed.player?.resume().catch(() => {}));
 // Mouth from the feed at this moment, or null when he isn't speaking.
+// Subtitles a line or two at a time: the spoken words grouped into chunks that end at a sentence
+// (or clause) once they're long enough, and never run past SUB_MAX characters. Each chunk shows
+// from its first word's start, so the subtitle turns over with the voice.
+const SUB_MIN = 45, SUB_MAX = 95;
+function shortLines(words) { // words: [{ text, start }] -> [{ start, text }]
+  const out = [];
+  let cur = null;
+  for (const w of words) {
+    if (cur && cur.text.length + 1 + w.text.length > SUB_MAX) cur = null;
+    if (!cur) { cur = { start: w.start, text: '' }; out.push(cur); }
+    cur.text += (cur.text ? ' ' : '') + w.text;
+    if (cur.text.length >= SUB_MIN && /[.!?…]["')\]]*$|[,;:—–]$/.test(w.text)) cur = null;
+  }
+  return out;
+}
+const subCache = { id: null, n: 0, lines: [] };
 function feedMouth() {
   const f = feed.player?.frame();
   if (!f?.utteranceId) return null;
   const sp = feed.client.getState().speech[feed.sessionId];
   const word = sp ? window.LIPSYNC.wordAt(sp.words, f.t) : null;
   const shape = word ? window.LIPSYNC.mouthAt(word, f.t) : null;
+  const words = sp?.words || [];
+  if (subCache.id !== f.utteranceId || subCache.n !== words.length)
+    Object.assign(subCache, { id: f.utteranceId, n: words.length, lines: shortLines(words.map((w) => ({ text: String(w.word), start: w.start }))) });
+  let line = '';
+  for (const c of subCache.lines) if (c.start <= f.t + 0.05) line = c.text;
   return {
     shape,                              // phoneme (or spelling) shape now; null between words
     loud: Math.min(1, f.level * 1.6),   // how loud the voice is right now, 0..1
-    line: sp?.text || '',
+    line,
   };
 }
 
@@ -1023,6 +1093,7 @@ function drawFrame(now) {
   const silent = muted || !settings.feedPlayAudio;
   if (feed.player && feed.muted !== silent) { feed.player.setMuted(silent); feed.muted = silent; }
   const ears = window.EARS.tick({ client: feed.client, base: feedBase(), posture, sessionId: feed.sessionId, micDevice: (settings.micDevice || '').trim() });
+  if (posture !== 'off' && settings.acks !== false) loadAcks((settings.ackVoice || 'am_calcifer').trim());
   const heard = useAudio ? hear(settings.audioGain ?? 1) : null;
   status.textContent = useAudio && ear.err ? ear.err : feed.err && (mode === 'feed' || posture !== 'off') ? feed.err : ears.err;
   let talking = false, syl = null, sylT = 0, item = null;
@@ -1030,6 +1101,11 @@ function drawFrame(now) {
     while (queue.length && now > queue[0].start + queue[0].plan.dur * 1000 + 300) queue.shift();
     item = queue[0];
     if (item && now >= item.start) { talking = true; sylT = (now - item.start) / 1000; }
+  }
+  const ackLoud = ackLevel();
+  if (ackLoud !== null && !talking) {                      // a quick reply ("mm-hm?") is playing
+    talking = true; line = ack.line; wide = 0.55;
+    amp = ackLoud;
   } else if (mode === 'feed') {
     queue.length = 0; // replies arrive through the feed, with their real timing
     const m = feedMouth();
