@@ -21,9 +21,7 @@
 </style>
 </head>
 <body>
-<canvas id="bg"></canvas>
-<canvas id="fire"></canvas>
-<canvas id="fg"></canvas>
+<canvas id="view"></canvas>
 <div id="sub"></div>
 <div id="status"></div>
 <select id="device" title="Audio input he listens to"></select>
@@ -38,8 +36,8 @@
  *
  * Layers, back to front: the painted hearth (assets/hearth-bare.jpg, plus the hanging herbs as
  * swaying layers) lit by him, his body (a WebGL
- * flame shader), then on the 2D layer his face, the log (assets/log.png, cut from the painting)
- * and his arms over it.
+ * flame shader), then his face, the log (assets/log.png, cut from the painting) and his arms over
+ * it. The painting and the flame render offscreen; only one canvas is on screen.
  *
  * Everything he does is a rig parameter:
  *   body:  size, lean, sway (flame speed), heat (palette), impulse (flare/sputter)
@@ -234,7 +232,7 @@ function syncText(heard, talking, dt) {
 }
 
 // ---------- Fire shader ----------
-const fireCv = document.getElementById('fire');
+const fireCv = document.createElement('canvas'); // offscreen: composited into the one visible canvas
 const gl = fireCv.getContext('webgl2', { premultipliedAlpha: true, alpha: true, antialias: false });
 const VS = `#version 300 es
 in vec2 a; void main(){ gl_Position = vec4(a, 0., 1.); }`;
@@ -348,7 +346,10 @@ function updateSwayers(dt, t) {
 const logImg = new Image(); logImg.src = LOG.src;
 
 // ---------- State ----------
-const bgCv = document.getElementById('bg'), fgCv = document.getElementById('fg');
+// One visible canvas. The painting and the fire are drawn offscreen and copied into it each frame:
+// every extra on-screen canvas is another compositor layer Chromium can lose under GPU pressure
+// (then he freezes or goes semi-transparent), and one layer can't fall out of step with another.
+const bgCv = document.createElement('canvas'), fgCv = document.getElementById('view');
 const faceCv = document.createElement('canvas'), faceCtx = faceCv.getContext('2d'); // offscreen
 const logCv = document.createElement('canvas'), logCtx = logCv.getContext('2d');    // offscreen
 const FACE_ALPHA = 0.56; // the face lets his fire glow through a little
@@ -823,8 +824,10 @@ function frame(now) {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
-  // Face, then the log in front of him, then his arms round it
+  // Composite: the lit painting, his body, then the face, the log in front of him, his arms round it
   fg.clearRect(0, 0, W, H);
+  fg.drawImage(bgCv, 0, 0, W, H);
+  if (gl && prog) fg.drawImage(fireCv, 0, 0, W, H);
   const F = R0 * Math.pow(size, 0.55);
   const faceX = cx + rig.lean * R * 0.3, eyeY = cy - R * 0.06, gap = F * 0.4, mouthY = cy + R * 0.24;
   // The face is painted opaque on a small offscreen canvas around it, then laid onto the front
