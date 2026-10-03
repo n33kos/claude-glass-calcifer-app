@@ -14,7 +14,8 @@
   },
   "permissions": { "microphone": true, "storage": true },
   "stored": {
-    "inputDevice": { "scope": "global", "default": "" }
+    "inputDevice": { "scope": "global", "default": "" },
+    "health": { "scope": "global", "default": {} }
   },
   "settings": {
     "persona": { "type": "bool", "label": "Claude speaks as Calcifer", "default": true },
