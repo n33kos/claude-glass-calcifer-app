@@ -31,6 +31,7 @@
 <script src="persona/calcifer.js?v=3"></script><!-- bump ?v= when the persona changes -->
 <script src="lipsync.js?v=1"></script><!-- bump ?v= when lip sync changes -->
 <script src="ears.js?v=13"></script><!-- bump ?v= when the ears change -->
+<script src="sounds.js?v=1"></script><!-- bump ?v= when the sounds change -->
 <script src="assets/sway.js?v=8"></script><!-- bump ?v= when the scene's images change -->
 
 <script>
@@ -587,6 +588,7 @@ function react(kind) {
   if (kind === 'sputter') rig.impulse -= 0.5;
   if (kind === 'sparks') burst(46);
   if (kind === 'wince') { rig.squint = 1; rig.shake = 1; }
+  window.SOUNDS?.play(kind);
 }
 function burst(n) {
   for (let i = 0; i < n; i++) embers.push({ x: (Math.random() - 0.5) * 0.6, y: 0.6, vx: (Math.random() - 0.5) * 2.4, vy: 1.4 + Math.random() * 2.6, life: 1, big: Math.random() < 0.35 });
@@ -611,7 +613,7 @@ function perform(o) {
   const now = performance.now();
   if (o.mood) B.overlay = { mood: o.mood, until: now + (o.for ?? 3) * 1000, strong: !!o.strong };
   if (o.react) react(o.react);
-  if (o.action && ACTIONS[o.action]) B.action = { name: o.action, start: now, dur: ACTIONS[o.action].dur };
+  if (o.action && ACTIONS[o.action]) { B.action = { name: o.action, start: now, dur: ACTIONS[o.action].dur }; window.SOUNDS?.play(o.action); }
   if (o.gaze) B.gaze = { mode: o.gaze, until: now + (o.for ?? 2.5) * 1000, side: Math.random() < 0.5 ? -1 : 1 };
 }
 function restingMood(now) {
@@ -1178,6 +1180,8 @@ function drawFrame(now) {
   const logW = LOG.span * S.iw, logH = LOG.thick * S.ih;
   const R0 = logW * 0.44;
   const size = Math.max(0.35, rig.size + rig.impulse + amp * 0.05 + 0.025 * Math.sin(t * 1.9));
+  window.SOUNDS?.tick({ on: settings.sounds !== false, ambience: settings.ambience !== false, volume: (settings.soundVolume ?? 35) / 100,
+    size, sway: rig.sway ?? 1, asleep: shown === 'asleep' });
   const R = R0 * size;
   const jit = (rig.tremble * 0.014 + rig.shake * 0.035) * R0;
   const cx = logCx + (Math.random() - 0.5) * jit + noise(t * 0.6, 3) * R0 * 0.02;

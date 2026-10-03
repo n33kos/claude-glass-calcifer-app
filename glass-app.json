@@ -42,6 +42,9 @@
     "subtitles": { "type": "bool", "label": "Show subtitles", "default": false },
     "subtitleSize": { "type": "number", "label": "Subtitle size (%)", "default": 100, "min": 50, "max": 250 },
     "subtitleColor": { "type": "color", "label": "Subtitle color", "default": "#fff3cf" },
-    "hearth": { "type": "bool", "label": "Draw the fireplace", "default": true }
+    "hearth": { "type": "bool", "label": "Draw the fireplace", "default": true },
+    "sounds": { "type": "bool", "label": "Sound effects (flare, sputter, sparks, nibbling)", "default": true },
+    "ambience": { "type": "bool", "label": "Crackling hearth (ambient fire sound)", "default": true },
+    "soundVolume": { "type": "number", "label": "Sound volume (%)", "default": 35, "min": 0, "max": 100 }
   }
 }
