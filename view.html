@@ -563,8 +563,7 @@ function onProps(p) {
   if ((st.moodSeq || 0) !== moodSeqSeen) {
     moodSeqSeen = st.moodSeq; mood = st.mood || 'neutral';
     moodUntil = st.moodFor ? performance.now() + st.moodFor * 1000 : 0;
-    B.explicitAt = B.quietSince = performance.now();
-    rig.impulse += 0.12;
+    B.explicitAt = B.quietSince = performance.now(); // straight into the new mood, no puff
   }
   if (st.cue && st.cue.seq !== B.cueSeen) { B.cueSeen = st.cue.seq; onCue(st.cue.name); }
   if ((st.seq || 0) === seen) return;
