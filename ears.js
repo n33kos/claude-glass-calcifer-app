@@ -167,8 +167,12 @@ function heard(clip) {
   ear.transcribing++;
   chain = chain.then(async () => {
     try {
-      const text = await transcribe(clip);
-      if (!text) return log(clip, '', 'empty');
+      const heardText = await transcribe(clip);
+      // Whisper labels non-speech ("[MUSIC PLAYING]", "*Spanish*", "(mumbling)"), and on noise it
+      // can echo its hint back verbatim ("Calcifer, the fire demon."): neither is the user talking.
+      const text = heardText.replace(/\[[^\]]*\]|\*[^*]*\*|\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!text) return log(clip, heardText, 'not speech');
+      if (/fire demon/i.test(text)) return log(clip, heardText, "Whisper echoing its hint: ignored");
       const m = findName(text);
       if (m) {
         if (!m.rest) conv.followUntil = performance.now() + FOLLOW_MS;
