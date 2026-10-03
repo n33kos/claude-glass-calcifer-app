@@ -1,0 +1,20 @@
+{
+  "apiVersion": 1,
+  "type": "scroll",
+  "title": "Scroll",
+  "icon": "icon.svg",
+  "singleton": true,
+  "autoOpen": false,
+  "chrome": "none",
+  "description": "Calcifer's scroll: a painted parchment that unrolls with whatever Claude presents (markdown, tables, code, mermaid diagrams). Each unroll is a new page; the user can flip back through them.",
+  "commands": {
+    "unroll": { "usage": "unroll --title <title> (--text <markdown> | --text-file <file.md>)", "help": "Unroll a new page on the scroll" },
+    "append": { "usage": "append (--text <markdown> | --text-file <file.md>)", "help": "Add more to the page that's showing" },
+    "page": { "usage": "page --index <n>", "help": "Show page n (0 is the oldest)", "view": true },
+    "clear": { "usage": "clear", "help": "Roll it up: forget every page" }
+  },
+  "settings": {
+    "titleFont": { "type": "enum", "label": "Title lettering", "default": "quill", "options": ["quill", "book"] },
+    "textSize": { "type": "number", "label": "Text size (px)", "default": 17, "min": 12, "max": 28 }
+  }
+}

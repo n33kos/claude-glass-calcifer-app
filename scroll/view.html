@@ -1,0 +1,166 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="glass-app://sdk/glass-app.css">
+<script src="glass-app://sdk/glass-app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<style>
+  @font-face { font-family: 'Quill'; src: url(fonts/pinyon-script-latin-400-normal.woff2) format('woff2'); }
+  @font-face { font-family: 'Book'; src: url(fonts/alegreya-latin-400-normal.woff2) format('woff2'); }
+  @font-face { font-family: 'Book'; font-style: italic; src: url(fonts/alegreya-latin-400-italic.woff2) format('woff2'); }
+  @font-face { font-family: 'Book'; font-weight: 700; src: url(fonts/alegreya-latin-700-normal.woff2) format('woff2'); }
+
+  :root {
+    --ink: #3a2717; --ink-soft: #6b4a2e; --ink-faint: rgba(74, 46, 22, .55); --rust: #8c3a1a;
+    --wash: rgba(110, 70, 30, .09); --rule: rgba(90, 55, 25, .28);
+    --w: 400px; --s: 1;          /* scroll width, and scale against the 900px art */
+    --text-size: 17px;
+  }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
+  body { display: flex; justify-content: center; align-items: flex-start; }
+
+  .scroll { width: var(--w); height: 100%; display: flex; flex-direction: column; filter: drop-shadow(0 10px 18px rgba(0,0,0,.45)); }
+  .roller { flex: none; width: 100%; background-size: 100% 100%; position: relative; z-index: 2; }
+  .top { height: calc(197px * var(--s)); background-image: url(assets/top.png); }
+  .bottom { height: calc(170px * var(--s)); background-image: url(assets/bottom.png); margin-top: -2px; }
+  .paper {
+    flex: 1 1 auto; min-height: 0; margin-top: -2px; background: url(assets/paper.png) 0 0 / 100% 100% no-repeat;
+    position: relative; overflow: hidden;
+    transition: flex-grow 900ms cubic-bezier(.3,.8,.3,1), max-height 900ms cubic-bezier(.3,.8,.3,1);
+    max-height: 100vh;
+  }
+  .scroll.rolled .paper { max-height: 0; }
+
+  /* the writable part of the paper: inside its ragged edges */
+  .sheet {
+    position: absolute; inset: 0 15.5% 0 15.5%; overflow-y: auto; overflow-x: hidden;
+    padding: calc(14px * var(--s) + 6px) 2px calc(18px * var(--s) + 8px);
+    scrollbar-width: none; overscroll-behavior: contain;
+    -webkit-mask-image: linear-gradient(transparent 0, #000 14px, #000 calc(100% - 22px), transparent 100%);
+            mask-image: linear-gradient(transparent 0, #000 14px, #000 calc(100% - 22px), transparent 100%);
+  }
+  .sheet::-webkit-scrollbar { display: none; }
+
+  .ink { color: var(--ink); font: 400 var(--text-size)/1.45 'Book', Georgia, serif; overflow-wrap: anywhere; }
+  .ink.fresh { animation: ink 1100ms 250ms both ease-out; }
+  @keyframes ink { from { opacity: 0; filter: blur(2px); } to { opacity: 1; filter: none; } }
+
+  .ink h1.title {
+    font: 400 calc(var(--text-size) * 2.35)/1.05 'Quill', 'Book', serif; color: var(--rust);
+    text-align: center; margin: .1em 0 .25em; letter-spacing: .01em;
+  }
+  body.book .ink h1.title { font: 700 calc(var(--text-size) * 1.55)/1.15 'Book', serif; font-variant: small-caps; letter-spacing: .03em; }
+  .flourish { display: block; margin: 0 auto .7em; width: 58%; height: 10px; color: var(--ink-faint); }
+
+  .ink h1:not(.title), .ink h2, .ink h3 { font-family: 'Book', serif; color: var(--rust); line-height: 1.2; margin: 1em 0 .35em; }
+  .ink h1:not(.title) { font-size: 1.35em; } .ink h2 { font-size: 1.2em; } .ink h3 { font-size: 1.05em; font-style: italic; }
+  .ink p { margin: .5em 0; }
+  .ink ul, .ink ol { margin: .4em 0; padding-left: 1.25em; }
+  .ink li { margin: .2em 0; } .ink li::marker { color: var(--rust); }
+  .ink strong { color: #2a1a0e; }
+  .ink a { color: var(--rust); }
+  .ink blockquote { margin: .7em 0; padding: .1em .8em; border-left: 2px solid var(--rule); color: var(--ink-soft); font-style: italic; }
+  .ink hr { border: 0; height: 10px; margin: 1em 0; background: center / 50% 10px no-repeat
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 10'%3E%3Cpath d='M2 5 C40 1 70 9 100 5 S160 1 198 5' fill='none' stroke='%236b4a2e' stroke-opacity='.55' stroke-width='1.3'/%3E%3Ccircle cx='100' cy='5' r='2.2' fill='%238c3a1a' fill-opacity='.7'/%3E%3C/svg%3E"); }
+  .ink code { font-family: var(--font-mono, ui-monospace, monospace); font-size: .82em; background: var(--wash); padding: .05em .3em; border-radius: 3px; }
+  .ink pre { background: var(--wash); border: 1px solid var(--rule); border-radius: 4px; padding: .6em .7em; overflow-x: auto; font-size: .9em; line-height: 1.35; }
+  .ink pre code { background: none; padding: 0; }
+  .ink table { border-collapse: collapse; width: 100%; font-size: .92em; margin: .6em 0; }
+  .ink th { text-align: left; color: var(--rust); font-weight: 700; border-bottom: 1.5px solid var(--rule); padding: .25em .4em; }
+  .ink td { border-bottom: 1px solid rgba(90,55,25,.14); padding: .25em .4em; vertical-align: top; }
+  .ink img { max-width: 100%; }
+  .ink .mermaid { text-align: center; margin: .6em 0; }
+  .ink .mermaid svg { max-width: 100%; height: auto; }
+
+  .empty { text-align: center; color: var(--ink-faint); font-style: italic; margin-top: 30%; }
+  .empty b { display: block; font: 400 calc(var(--text-size) * 2)/1 'Quill', serif; color: var(--ink-soft); font-style: normal; margin-bottom: .3em; }
+
+  /* page turners, carved into the bottom roller */
+  .pager { position: absolute; left: 0; right: 0; bottom: calc(52px * var(--s)); display: flex; justify-content: center; gap: calc(26px * var(--s) + 6px);
+    font: 400 13px/1 'Book', serif; color: #f1dfbd; opacity: 0; transition: opacity 200ms; }
+  .scroll:hover .pager { opacity: .9; }
+  .pager button { all: unset; cursor: pointer; padding: 2px 6px; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  .pager button:disabled { opacity: .3; cursor: default; }
+  .pager span { text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+</style>
+</head>
+<body>
+  <div class="scroll rolled" id="scroll">
+    <div class="roller top"></div>
+    <div class="paper"><div class="sheet" id="sheet"></div></div>
+    <div class="roller bottom">
+      <div class="pager" id="pager"><button id="prev" title="Earlier page">◂</button><span id="count"></span><button id="next" title="Later page">▸</button></div>
+    </div>
+  </div>
+<script>
+  const ART_W = 900, ART_CAPS = 197 + 170;
+  const $ = (id) => document.getElementById(id);
+  const flourish = `<svg class="flourish" viewBox="0 0 200 10" preserveAspectRatio="none"><path d="M2 6 C30 2 60 9 92 5 M108 5 C140 1 170 9 198 4" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M100 1 l3 4 -3 4 -3 -4z" fill="#8c3a1a" fill-opacity=".75"/></svg>`;
+  let last = { seq: -1, index: -2, body: null }, mermaidReady = null;
+
+  function fit(size) {
+    const W = size?.width || innerWidth, H = size?.height || innerHeight;
+    // as wide as the window allows, but the rollers never take more than ~40% of the height
+    const w = Math.max(160, Math.min(W - 8, ART_W, (H * 0.4) * ART_W / ART_CAPS));
+    document.documentElement.style.setProperty('--w', w + 'px');
+    document.documentElement.style.setProperty('--s', String(w / ART_W));
+  }
+
+  function mermaid() {
+    if (!mermaidReady) mermaidReady = new Promise((ok) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js';
+      s.onload = () => { window.mermaid.initialize({ startOnLoad: false, theme: 'base', fontFamily: 'Book, serif', themeVariables: {
+        background: 'transparent', primaryColor: '#efdcb8', primaryBorderColor: '#6b4a2e', primaryTextColor: '#3a2717',
+        lineColor: '#6b4a2e', secondaryColor: '#e6cfa4', tertiaryColor: '#f3e5c8', noteBkgColor: '#f3e5c8', noteBorderColor: '#8c3a1a' } }); ok(window.mermaid); };
+      document.head.appendChild(s);
+    });
+    return mermaidReady;
+  }
+
+  function render(page, fresh) {
+    const sheet = $('sheet');
+    if (!page) { sheet.innerHTML = `<div class="ink empty"><b>Nothing yet</b>Calcifer will write here when he has something to show you.</div>`; return; }
+    const html = DOMPurify.sanitize(marked.parse(page.body, { gfm: true, breaks: false }));
+    sheet.innerHTML = `<div class="ink${fresh ? ' fresh' : ''}">${page.title ? `<h1 class="title">${DOMPurify.sanitize(page.title)}</h1>${flourish}` : ''}${html}</div>`;
+    const blocks = sheet.querySelectorAll('pre code.language-mermaid');
+    if (blocks.length) mermaid().then(async (m) => {
+      for (const code of blocks) {
+        const div = document.createElement('div'); div.className = 'mermaid';
+        try { div.innerHTML = (await m.render('m' + Math.random().toString(36).slice(2), code.textContent)).svg; code.parentElement.replaceWith(div); } catch {}
+      }
+    });
+  }
+
+  function unroll() {
+    const el = $('scroll');
+    el.classList.add('rolled'); void el.offsetHeight;
+    requestAnimationFrame(() => el.classList.remove('rolled'));
+  }
+
+  glass.onState(({ state, size, settings }) => {
+    fit(size);
+    document.documentElement.style.setProperty('--text-size', (settings?.textSize ?? 17) + 'px');
+    document.body.classList.toggle('book', settings?.titleFont === 'book');
+    const pages = state?.pages ?? [], i = state?.index ?? -1, page = pages[i];
+    const isNew = state.seq !== last.seq;
+    if (isNew || i !== last.index || page?.body !== last.body) {
+      const appended = !isNew && i === last.index;
+      const keep = appended ? $('sheet').scrollTop : 0;
+      render(page, !appended);
+      $('sheet').scrollTop = keep;
+      if (isNew || last.index === -2) unroll();
+    }
+    last = { seq: state.seq, index: i, body: page?.body };
+    $('count').textContent = pages.length ? `${i + 1} / ${pages.length}` : '';
+    $('prev').disabled = i <= 0; $('next').disabled = i >= pages.length - 1;
+    $('pager').style.display = pages.length > 1 ? '' : 'none';
+    $('prev').onclick = () => glass.run('page', { index: i - 1 });
+    $('next').onclick = () => glass.run('page', { index: i + 1 });
+  });
+  addEventListener('resize', () => fit());
+</script>
+</body>
+</html>

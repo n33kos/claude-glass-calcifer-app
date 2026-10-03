@@ -134,6 +134,16 @@ offers what the Mac is playing as an input named *Calcifer System Audio*, only w
 window is open: see [`extras/macos-system-audio`](extras/macos-system-audio). Elsewhere, any
 loopback input works (on Linux, the "Monitor of ..." inputs).
 
+## His scroll (optional)
+
+[`scroll/`](scroll) is a second app: a painted parchment that unrolls whatever Claude presents
+(markdown, tables, code, mermaid diagrams), in a bare window with no glass panel around it
+(Claude Glass 3.6+). It's a separate app, so link it in too:
+
+```sh
+ln -s ~/.claude/claude-glass/apps/calcifer/scroll ~/.claude/claude-glass/apps/scroll
+```
+
 ## Credits
 
 A fan project. Calcifer is from *Howl's Moving Castle* (Diana Wynne Jones's novel and Studio
