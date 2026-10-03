@@ -38,7 +38,7 @@ replies are spoken.
 
 ## Install
 
-Needs [Claude Glass](https://github.com/n33kos/claude-glass) 3.5 or newer.
+Needs [Claude Glass](https://github.com/n33kos/claude-glass) 3.7 or newer (3.7 lets him load his sounds).
 
 ```sh
 git clone https://github.com/n33kos/claude-glass-calcifer-app ~/.claude/claude-glass/apps/calcifer
@@ -62,6 +62,7 @@ Settings → Apps → Calcifer:
 | Audio sensitivity | for `input` / `both` |
 | Speech speed, delay | for `text`: tune to your text-to-speech |
 | Subtitles, fireplace | show the spoken line; draw the hearth (off: just him) |
+| Sound effects, crackling hearth, sound volume | his reactions' sounds (whoosh, fizzle, sparks, crunching his log) and the fire's ambient crackle, which swells with his flame and smolders while he sleeps. Real CC0 recordings ([credits](assets/sounds/CREDITS.md)) |
 
 In `input` or `both` mode, hover his window to pick the audio input from a list.
 

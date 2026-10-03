@@ -23,18 +23,16 @@ function ensure() {
   return ctx;
 }
 
-// Decoded buffers, so the loop is sample-exact and one-shots can play slices. The clips come in
-// assets/sounds/sounds-data.js (base64): the sandbox can't fetch the app's own files.
+// Decoded buffers, so the loop is sample-exact and one-shots can play slices. A view may fetch its
+// own folder from Claude Glass 3.7 on.
 async function load() {
   if (S.loading) return; S.loading = true;
-  const data = window.SOUND_DATA || {};
-  await Promise.all(Object.keys(FILES).map(async (k) => {
+  await Promise.all(Object.entries(FILES).map(async ([k, f]) => {
     try {
-      if (!data[k]) throw new Error('missing (run assets/sounds/pack.sh)');
-      const bin = atob(data[k]), bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      S.buf[k] = await S.ctx.decodeAudioData(bytes.buffer);
-    } catch (e) { S.err = `sound ${FILES[k]}: ${e?.message || e}`; }
+      const res = await fetch('assets/sounds/' + f);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      S.buf[k] = await S.ctx.decodeAudioData(await res.arrayBuffer());
+    } catch (e) { S.err = `sound ${f}: ${e?.message || e} (needs Claude Glass 3.7+)`; }
   }));
   if (S.buf.hearth) {
     const src = S.ctx.createBufferSource(); src.buffer = S.buf.hearth; src.loop = true;
