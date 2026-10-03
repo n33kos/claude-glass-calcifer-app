@@ -368,8 +368,9 @@ void main(){
   float up = smoothstep(-0.4, 1.5, p.y);                // 0 in the round body, 1 up in the licks
   p.x -= uLean * up * 0.8;
   // uFlame is a clock that runs at the current sway speed (accumulated in JS), so changing the
-  // speed never makes the flames race the way time * speed would.
-  float f = floor(uFlame * 12.) / 12.;
+  // speed never makes the flames race the way time * speed would. JS already steps it "on twos"
+  // in real time (12 a second), so a slow, sad flame moves less per step, not fewer steps.
+  float f = uFlame;
   vec2 q = vec2(p.x * 1.2, p.y * 0.9 - f * 1.25);
   float n = fbm(q * 1.3);
   float n2 = fbm(q * 2.1 + vec2(n * 1.7, -f * 0.5));
@@ -898,6 +899,7 @@ addEventListener('contextmenu', (e) => {
 // ---------- Frame ----------
 let last = performance.now();
 let flameClock = 0; // advances at the current sway speed
+let flameStep = -1, flameHeld = 0; // the clock as of the current 1/12 s step
 // The loop. requestAnimationFrame normally drives it, but a frame inside the glass can have its
 // animation callbacks paused (after sleep, minimize, or being hidden) and not resumed. A watchdog
 // notices when frames stop and keeps him going on a timer until animation callbacks come back.
@@ -1102,7 +1104,9 @@ function drawFrame(now) {
     gl.uniform1f(uni.uR, R * fireDpr);
     gl.uniform1f(uni.uSway, rig.sway);
     flameClock += dt * rig.sway;
-    gl.uniform1f(uni.uFlame, flameClock);
+    const step = Math.floor(t * 12);                       // 12 drawings a second, whatever his mood
+    if (step !== flameStep) { flameStep = step; flameHeld = flameClock; }
+    gl.uniform1f(uni.uFlame, flameHeld);
     gl.uniform1f(uni.uLean, rig.lean);
     gl.uniform1f(uni.uGlow, glow);
     gl.uniform1f(uni.uAlpha, BODY_ALPHA * (stored.muted ? 0.75 : 1));
