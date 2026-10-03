@@ -50,6 +50,12 @@ function findName(text) {
 const STOP = /^(please )?(stop listening|stop|go (back )?to sleep|that'?s all|that will be all|good ?night|you can stop|never ?mind)$/;
 const MUTE = /^(please )?(hush|mute|be quiet|quiet|shh+|shush|silence)$/;
 const UNMUTE = /^(please )?(unmute|speak up|talk to me|you can talk|speak)$/;
+// In a conversation his name is often misheard past recognizing ("'cause first stop listening"),
+// so a short utterance ending in "stop listening" / "go to sleep" ends it without the name.
+function endsConversation(text) {
+  const words = String(text).toLowerCase().replace(/[^a-z' ]/g, ' ').trim().split(/\s+/);
+  return words.length <= 5 && /(stop listening|go to sleep)$/.test(words.join(' ')) ? 'stop' : null;
+}
 function voiceCommand(rest) {
   const r = rest.toLowerCase().replace(/[.,!?'"]/g, '').replace(/\s+/g, ' ').trim();
   if (STOP.test(r)) return 'stop';
@@ -211,7 +217,7 @@ async function leaveRoom() {
 // ---------- Each frame ----------
 const conv = { silenceSeq: null, usersSeen: null, idleSince: 0, claudeTurnEnded: 0, followUntil: 0 };
 const ears = {
-  findName, skeleton, voiceCommand,
+  findName, skeleton, voiceCommand, endsConversation,
   onName: null,
   // ctx: { client, base, posture, sessionId }; returns what the scene shows.
   tick({ client, base, posture, sessionId }) {
@@ -248,7 +254,7 @@ const ears = {
       const users = (s.transcripts[sessionId] || []).filter((e) => e.speaker === 'user');
       if (conv.usersSeen === null) conv.usersSeen = users.length;
       for (const e of users.slice(conv.usersSeen)) {
-        const m = findName(e.text || ''), cmd = m && voiceCommand(m.rest);
+        const m = findName(e.text || ''), cmd = m ? voiceCommand(m.rest) : endsConversation(e.text || '');
         if (cmd) ears.onCommand?.(cmd, 'transcript');
       }
       conv.usersSeen = users.length;

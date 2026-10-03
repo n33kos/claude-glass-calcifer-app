@@ -4,7 +4,13 @@ const assert = require('node:assert');
 global.window = {};
 global.performance ??= { now: () => 0 };
 require('../ears.js');
-const { findName, voiceCommand, skeleton } = window.EARS;
+const { findName, voiceCommand, skeleton, endsConversation } = window.EARS;
+
+test('"stop listening" ends a conversation even when his name is misheard', () => {
+  assert.strictEqual(endsConversation("'cause first stop listening."), 'stop');
+  assert.strictEqual(endsConversation('go to sleep'), 'stop');
+  assert.strictEqual(endsConversation('the server should stop listening on port 80 after the tests'), null);
+});
 
 test('Whisper\'s mishearings of his name sound alike', () => {
   for (const s of ['Calcifer', 'Call Cypher', 'Call Cipher', 'Cal Sifer', 'Kels4', 'Kelsifer']) assert.strictEqual(skeleton(s), 'KLSFR', s);
