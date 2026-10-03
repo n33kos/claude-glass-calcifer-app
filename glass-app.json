@@ -20,6 +20,7 @@
     "muted": { "scope": "global", "default": false },
     "inputDevice": { "scope": "global", "default": "" },
     "health": { "scope": "global", "default": {} },
+    "earLog": { "scope": "global", "default": [] },
     "feedToken": { "scope": "global", "default": "" }
   },
   "settings": {

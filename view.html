@@ -28,7 +28,7 @@
 <script src="glass-app://sdk/glass-app.js"></script>
 <script src="persona/calcifer.js?v=3"></script><!-- bump ?v= when the persona changes -->
 <script src="lipsync.js?v=1"></script><!-- bump ?v= when lip sync changes -->
-<script src="ears.js?v=6"></script><!-- bump ?v= when the ears change -->
+<script src="ears.js?v=7"></script><!-- bump ?v= when the ears change -->
 <script src="assets/sway.js?v=8"></script><!-- bump ?v= when the scene's images change -->
 
 <script>
@@ -275,7 +275,7 @@ window.EARS.onCommand = (cmd) => {
 window.EARS.onName = (rest) => {
   const cmd = window.EARS.voiceCommand(rest);
   if (cmd) return window.EARS.onCommand(cmd);
-  if (rest.split(/\s+/).filter(Boolean).length >= 2) feed.client?.sendText(rest);
+  if (/[a-z]/i.test(rest.replace(/\b(please|hi|hey|hello|um|uh|yes|yeah|okay|ok)\b/gi, ''))) feed.client?.sendText(rest);
   setPosture('open');
 };
 // What you said right after his name, before the conversation's mic was open
@@ -284,6 +284,7 @@ window.EARS.onFollow = (text) => {
   if (cmd) return window.EARS.onCommand(cmd);
   feed.client?.sendText(text);
 };
+window.EARS.onLog = (earLog) => glass.store({ earLog });
 
 // Browsers may hold audio until a gesture; any click on him resumes it.
 addEventListener('pointerdown', () => feed.player?.resume().catch(() => {}));

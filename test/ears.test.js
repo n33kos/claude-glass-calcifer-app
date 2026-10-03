@@ -31,7 +31,7 @@ test('other speech is not his name', () => {
     'Could you search for the file', 'Close the window', 'Clear the screen', 'Check the logs', 'Copy that file']) assert.strictEqual(findName(s), null, s);
 });
 
-test('permissive: rougher mishearings wake him, but only close ones carry a request', () => {
+test('permissive: rougher mishearings wake him too (marked loose, for the ear log)', () => {
   for (const s of ['Kelsey for', 'Calc for', 'Cal sifa', 'Kelso fur', 'Cassifer', 'Cal Cifra']) assert.ok(findName(s), s);
   assert.deepStrictEqual(findName("'cause first stop listening"), { rest: 'stop listening', loose: true });
   assert.strictEqual(findName('Clean up the branch').loose, true);

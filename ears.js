@@ -14,7 +14,8 @@ const WHISPER_URL = 'http://localhost:8100/v1/audio/transcriptions';
 const NAME = 'KLSFR';               // "Calcifer", as consonants
 const QUIET_MS = 60000;             // conversation ends after this long with nobody talking
 const COOLDOWN_MS = 1500;           // after Claude's turn: his own voice's tail can't wake him
-const MAX_CLIP_MS = 7000;
+const MAX_CLIP_MS = 20000;          // a whole request in one breath ("Calcifer, run the tests and...")
+const END_QUIET_MS = 900;           // a clip ends after this much quiet: a comma's pause doesn't split it
 
 // ---------- Hearing his name ----------
 // Whisper almost never spells him right ("Call Cypher", "Cal Cipher", "Kels4"), so words are
@@ -121,7 +122,7 @@ function onBlock(x, rate) {
   const r = ear.rec;
   r.blocks.push(block); r.ms += ms;
   if (loud) { r.loudMs += ms; r.quietMs = 0; } else r.quietMs += ms;
-  if (r.quietMs > 550 || r.ms > MAX_CLIP_MS) {
+  if (r.quietMs > END_QUIET_MS || r.ms > MAX_CLIP_MS) {
     ear.rec = null;
     if (r.loudMs >= 220 && ear.armed) heard(r);
   }
@@ -131,22 +132,30 @@ function onBlock(x, rate) {
 // is still opening. So after his name alone, the next few seconds of speech are sent as text.
 const FOLLOW_MS = 5000;
 let chain = Promise.resolve();
+// What he heard and what he made of it, the last 25 clips (stored as `earLog`, for tuning his ear).
+const earLog = [];
+function log(clip, text, did) {
+  earLog.push({ at: new Date().toISOString(), secs: +(clip.ms / 1000).toFixed(1), text, did });
+  if (earLog.length > 25) earLog.shift();
+  ears.onLog?.(earLog.slice());
+}
 function heard(clip) {
   ear.transcribing++;
   chain = chain.then(async () => {
     try {
       const text = await transcribe(clip);
-      if (!text) return;
+      if (!text) return log(clip, '', 'empty');
       const m = findName(text);
       if (m) {
-        const rest = m.loose && !voiceCommand(m.rest) ? '' : m.rest; // a loose match only wakes him
-        if (!rest) conv.followUntil = performance.now() + FOLLOW_MS;
-        ears.onName?.(rest, text);
+        if (!m.rest) conv.followUntil = performance.now() + FOLLOW_MS;
+        log(clip, text, m.rest ? `name${m.loose ? ' (loose)' : ''} + "${m.rest}"` : `name${m.loose ? ' (loose)' : ''} alone: listening on`);
+        ears.onName?.(m.rest, text);
       } else if (clip.startedAt < conv.followUntil && !/^\W*(thank you|thanks|you)\W*$/i.test(text)) {
         conv.followUntil = 0;
+        log(clip, text, 'follow-up: sent');
         ears.onFollow?.(text);
-      }
-    } catch (e) { ear.err = `Wake listener: ${e?.message || e}`; }
+      } else log(clip, text, 'not his name');
+    } catch (e) { ear.err = `Wake listener: ${e?.message || e}`; log(clip, '', `error: ${e?.message || e}`); }
     finally { ear.transcribing--; }
   });
 }
