@@ -5,21 +5,26 @@
   "icon": "icon.svg",
   "singleton": true,
   "autoOpen": false,
-  "description": "Calcifer, a fire demon in his hearth: Claude's animated persona. He talks while Claude's replies are spoken and shows whatever mood Claude gives him.",
+  "description": "Calcifer, a fire demon in his hearth: Claude's animated persona. He talks while Claude's replies are spoken (lip-synced to the real audio, word timings and phonemes in feed mode) and shows whatever mood Claude gives him.",
   "commands": {
     "mood": { "usage": "mood --mood <neutral|happy|grumpy|angry|sad|scared|thinking|sleepy|smug|excited> [--for <seconds>]", "help": "Set Calcifer's expression (held until changed, or for --for seconds)" },
     "react": { "usage": "react --kind <flare|sputter|sparks|wince>", "help": "A one-shot reaction: flare up, sputter low, throw sparks, wince" },
     "say": { "usage": "say --text <text>", "help": "Make him mouth some text now (speech normally follows your replies by itself)" },
     "hush": { "usage": "hush", "help": "Stop talking" }
   },
-  "permissions": { "microphone": true, "storage": true },
+  "permissions": { "microphone": true, "storage": true, "network": ["http://localhost:3100", "ws://localhost:3100"] },
   "stored": {
     "inputDevice": { "scope": "global", "default": "" },
-    "health": { "scope": "global", "default": {} }
+    "health": { "scope": "global", "default": {} },
+    "feedToken": { "scope": "global", "default": "" }
   },
   "settings": {
     "persona": { "type": "bool", "label": "Claude speaks as Calcifer", "default": true },
-    "audioSource": { "type": "enum", "label": "Lip sync from", "default": "text", "options": ["text", "input", "both"] },
+    "audioSource": { "type": "enum", "label": "Lip sync from", "default": "text", "options": ["text", "input", "both", "feed"] },
+    "feedUrl": { "type": "text", "label": "Speech feed URL (feed mode)", "default": "http://localhost:3100" },
+    "feedSession": { "type": "text", "label": "Speech feed session id (blank: this project)", "default": "" },
+    "feedPlayAudio": { "type": "bool", "label": "Play Claude's voice himself (feed mode; mute other players)", "default": false },
+    "feedDelay": { "type": "number", "label": "Voice delay when another app plays it (ms, feed mode)", "default": 90, "min": 0, "max": 1500 },
     "audioGain": { "type": "number", "label": "Audio sensitivity", "default": 1, "min": 0.2, "max": 5 },
     "autoSpeak": { "type": "bool", "label": "Talk along with Claude's replies (text mode)", "default": true },
     "speechRate": { "type": "number", "label": "Speech speed (characters per second)", "default": 15, "min": 5, "max": 40 },

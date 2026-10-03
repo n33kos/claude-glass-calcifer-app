@@ -27,6 +27,7 @@
 <select id="device" title="Audio input he listens to"></select>
 <script src="glass-app://sdk/glass-app.js"></script>
 <script src="persona/calcifer.js?v=3"></script><!-- bump ?v= when the persona changes -->
+<script src="lipsync.js?v=1"></script><!-- bump ?v= when lip sync changes -->
 <script src="assets/sway.js?v=8"></script><!-- bump ?v= when the scene's images change -->
 
 <script>
@@ -69,18 +70,8 @@ function cleanText(t) {
   return t.replace(/```[\s\S]*?```/g, ' ').replace(/`([^`]*)`/g, '$1').replace(/https?:\/\/\S+/g, 'link')
     .replace(/[#*_>|~\[\]()]/g, ' ').replace(/\s+/g, ' ').trim();
 }
-// Vowel sound -> [how open, how wide (0 = round "oo" .. 1 = flat "ee")]
-const SOUND = { ah: [1, 0.7], eh: [0.6, 0.9], ee: [0.38, 1], oh: [0.75, 0.2], oo: [0.45, 0], uh: [0.6, 0.6], ow: [0.85, 0.3] };
-// English spelling -> vowel sound, longest match first (rough, but far better than one letter)
-const SPELL = [['eau', 'oh'], ['ee', 'ee'], ['ea', 'ee'], ['ie', 'ee'], ['ei', 'eh'], ['ey', 'eh'], ['ai', 'eh'], ['ay', 'eh'],
-  ['oo', 'oo'], ['ew', 'oo'], ['ue', 'oo'], ['ui', 'oo'], ['ou', 'ow'], ['ow', 'oh'], ['oa', 'oh'], ['oe', 'oh'], ['oi', 'oh'], ['oy', 'oh'],
-  ['au', 'ah'], ['aw', 'ah'], ['a', 'ah'], ['e', 'eh'], ['i', 'ee'], ['o', 'oh'], ['u', 'uh'], ['y', 'ee']];
-function vowelSounds(word) {
-  let w = word.toLowerCase().replace(/[^a-z]/g, '');
-  if (w.length > 3 && /[^aeiouy]e$/.test(w)) w = w.slice(0, -1);    // silent final e: "make", "fire"
-  const groups = w.match(/[aeiouy]+/g) || (w ? ['a'] : []);
-  return groups.map((g) => (SPELL.find(([s]) => g.startsWith(s)) || ['', 'uh'])[1]);
-}
+// Vowel sounds from spelling, and phoneme-driven mouth shapes: lipsync.js
+const { SOUND, vowelSounds } = window.LIPSYNC;
 // The text as a timeline of syllables (each with a mouth shape) and pauses (punctuation).
 function plan(text, rate) {
   const syl = [], pauses = []; let t = 0; const per = 1 / rate;
@@ -185,6 +176,92 @@ function hear(gain) {
   ear.jaw = lerp(ear.jaw ?? 1, 1 - 0.45 * ee, 0.4);     // "ee" barely drops the jaw
   if (amp > 0.04) ear.heardAt = performance.now();
   return { amp: amp * ear.jaw, raw: amp, wide: ear.wide };
+}
+
+// ---------- Speech feed: speech events + audio from a relay ----------
+// Any server that speaks the speech-feed protocol (README: "Speech feed") over a WebSocket at
+// <url>/ws/client: speech_start / speech_chunk (word timings, optional phonemes) / speech_end
+// JSON, plus the audio as binary frames.  The vmux relay is one; it also serves the client
+// library this uses (<url>/sdk/vmux-client.js), so the two always match.  The audio is played
+// (or, muted, just clocked) here, so every word lands exactly when it's heard.
+const feed = { key: '', client: null, player: null, err: '', sessionId: null, loading: null, retryAt: 0 };
+async function feedSessionId() {
+  if (settings.feedSession) return settings.feedSession;
+  const dir = props?.session?.cwd;
+  if (!dir) return null;
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(dir.replace(/\/+$/, '')));
+  return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 12);
+}
+function loadFeedLibrary(base) {
+  if (window.VmuxClient) return Promise.resolve();
+  feed.loading ??= new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = `${base}/sdk/vmux-client.js`;
+    s.onload = () => (window.VmuxClient ? resolve() : reject(new Error('feed library did not load')));
+    s.onerror = () => { feed.loading = null; reject(new Error(`can't load ${s.src} (is the relay running?)`)); };
+    document.head.append(s);
+  });
+  return feed.loading;
+}
+function stopFeed() {
+  feed.player?.dispose();
+  feed.client?.stop();
+  Object.assign(feed, { client: null, player: null, sessionId: null });
+}
+// Called every frame like listen(): (re)connects when the settings change, else does nothing.
+async function useFeed(on) {
+  const base = (settings.feedUrl || 'http://localhost:3100').replace(/\/+$/, '');
+  const token = stored.feedToken || '';
+  const play = !!settings.feedPlayAudio;
+  const delayS = (settings.feedDelay ?? 90) / 1000;
+  const key = on ? [base, token, settings.feedSession || props?.session?.cwd || '', play, delayS].join('|') : '';
+  if (key === feed.key) return;
+  if (key && performance.now() < feed.retryAt) return; // backing off after a failure
+  feed.key = key;
+  stopFeed();
+  feed.err = '';
+  if (!on) return;
+  if (!token) {
+    feed.err = 'Speech feed needs a token: run `vmux token Calcifer`, then `claude-glass stored calcifer set feedToken \'"<token>"\'`';
+    return;
+  }
+  try {
+    await loadFeedLibrary(base);
+    const sessionId = await feedSessionId();
+    if (feed.key !== key) return; // settings changed meanwhile
+    const { RelayClient, SpeechPlayer } = window.VmuxClient;
+    const client = new RelayClient({ url: base, token, lockSessionId: sessionId, subscribeAudio: true });
+    // Playing it himself: exact sync.  Muted (another app plays it, e.g. the vmux pane through
+    // LiveKit): his clock waits feedDelay so his mouth lands with what you hear.
+    const player = new SpeechPlayer(client, { muted: !play, leadInS: play ? 0.08 : Math.max(0.08, delayS) });
+    client.on('close', ({ code }) => {
+      if (code === 4001) feed.err = 'Speech feed rejected the token (revoked or expired?)';
+      if (code === 4003) feed.err = 'Speech feed rejected this origin';
+    });
+    client.on('open', () => { feed.err = ''; });
+    client.start();
+    player.resume().catch(() => {});
+    Object.assign(feed, { client, player, sessionId });
+  } catch (e) {
+    feed.err = String(e?.message || e);
+    feed.key = '';                              // try again...
+    feed.retryAt = performance.now() + 5000;    // ...in a few seconds
+  }
+}
+// Browsers may hold audio until a gesture; any click on him resumes it.
+addEventListener('pointerdown', () => feed.player?.resume().catch(() => {}));
+// Mouth from the feed at this moment, or null when he isn't speaking.
+function feedMouth() {
+  const f = feed.player?.frame();
+  if (!f?.utteranceId) return null;
+  const sp = feed.client.getState().speech[feed.sessionId];
+  const word = sp ? window.LIPSYNC.wordAt(sp.words, f.t) : null;
+  const shape = word ? window.LIPSYNC.mouthAt(word, f.t) : null;
+  return {
+    shape,                              // phoneme (or spelling) shape now; null between words
+    loud: Math.min(1, f.level * 1.6),   // how loud the voice is right now, 0..1
+    line: sp?.text || '',
+  };
 }
 
 // ---------- Text + audio sync ----------
@@ -769,22 +846,39 @@ function drawFrame(now) {
   rig.squint = Math.max(0, rig.squint - dt * 1.6);
   { const bad = healRig(); if (bad.length) note(`non-finite: ${[...new Set(bad)].join(',')} (mood ${shown}, action ${B.action?.name || '-'})`); }
 
-  // Speech layer. Three sources:
+  // Speech layer. Four sources:
   //   text   the reply text on an estimated timeline (no audio)
   //   input  an audio input alone: loudness opens the jaw, the spectrum picks the vowel shape
   //   both   audio for timing and loudness, the text for which vowel it is (see syncText)
+  //   feed   a speech feed: the audio itself plus every word's timing and phonemes, so the
+  //          mouth makes each sound as it's heard
   let amp = 0, wide = rig.wide, press = false, line = '';
   const mode = settings.audioSource || 'text';
-  const useAudio = mode !== 'text';
+  const useAudio = mode === 'input' || mode === 'both';
   picker.classList.toggle('on', useAudio);
   listen(useAudio ? (stored.inputDevice || 'default') : '');
+  useFeed(mode === 'feed');
   const heard = useAudio ? hear(settings.audioGain ?? 1) : null;
-  status.textContent = useAudio && ear.err ? ear.err : '';
+  status.textContent = useAudio && ear.err ? ear.err : mode === 'feed' && feed.err ? feed.err : '';
   let talking = false, syl = null, sylT = 0, item = null;
   if (mode === 'text') {
     while (queue.length && now > queue[0].start + queue[0].plan.dur * 1000 + 300) queue.shift();
     item = queue[0];
     if (item && now >= item.start) { talking = true; sylT = (now - item.start) / 1000; }
+  } else if (mode === 'feed') {
+    queue.length = 0; // replies arrive through the feed, with their real timing
+    const m = feedMouth();
+    if (m) {
+      talking = true;
+      line = m.line;
+      if (m.shape) {
+        press = m.shape.press;
+        wide = m.shape.wide;
+        // The phoneme says how far the jaw goes; the voice's loudness scales it, so stressed
+        // and quiet syllables differ and a silence inside a word still closes him up.
+        amp = press ? 0 : m.shape.open * (0.55 + 0.45 * m.loud);
+      }
+    }
   } else if (heard) {
     talking = now - ear.heardAt < 160; // hold through the tiny gaps inside a word
     amp = heard.amp; wide = heard.wide;
@@ -804,9 +898,12 @@ function drawFrame(now) {
   // Mouth follows speech like a drawn jaw: snaps open, snaps nearly as fast back shut, presses on m/b/p
   if (!talking && act?.wide !== undefined) wide = act.wide;
   const targetOpen = talking ? Math.min(1, rig.open * 0.3 + amp * 0.85) : act?.open ?? rig.open;
-  const rate = press ? 1e-7 : targetOpen > rig.mouthOpen ? 1e-6 : 3e-6;
+  // A feed gives exact targets per sound, so follow them more tightly (still eased, so it reads
+  // as a jaw, not a flicker).
+  const tight = mode === 'feed' && talking;
+  const rate = press ? 1e-7 : tight ? (targetOpen > rig.mouthOpen ? 1e-9 : 1e-8) : targetOpen > rig.mouthOpen ? 1e-6 : 3e-6;
   rig.mouthOpen = lerp(rig.mouthOpen, targetOpen, 1 - Math.pow(rate, dt));
-  rig.mouthWide = lerp(rig.mouthWide, talking || act?.wide !== undefined ? wide : rig.wide, 1 - Math.pow(1e-4, dt));
+  rig.mouthWide = lerp(rig.mouthWide, talking || act?.wide !== undefined ? wide : rig.wide, 1 - Math.pow(tight ? 1e-7 : 1e-4, dt));
   sub.textContent = line; sub.classList.toggle('on', !!(settings.subtitles && line));
 
   // Blinks and glances
