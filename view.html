@@ -630,7 +630,7 @@ function onCue(name) {
 }
 // Little actions: each shapes the pose over its duration (p: 0..1) and may drive the mouth.
 const ACTIONS = {
-  yawn:    { dur: 2.0, run(p, pose) { const e = Math.pow(Math.sin(Math.PI * p), 1.5); pose.lid = Math.max(pose.lid, 0.6 * e); pose.smileEyes = 0; pose.size += 0.06 * e; return { open: 0.85 * e, wide: 0.15 }; } },
+  yawn:    { dur: 2.0, run(p, pose) { const e = Math.pow(Math.max(0, Math.sin(Math.PI * p)), 1.5); pose.lid = Math.max(pose.lid, 0.6 * e); pose.smileEyes = 0; pose.size += 0.06 * e; return { open: 0.85 * e, wide: 0.15 }; } },
   sigh:    { dur: 1.6, run(p, pose) { const e = Math.sin(Math.PI * p); pose.size -= 0.16 * e; pose.py += 0.3 * e; pose.sway *= 1 - 0.4 * e; return { open: 0.16 * e, wide: 0.3 }; } },
   hop:     { dur: 0.7, run(p) { return { dy: -Math.sin(Math.PI * p) * 0.18 }; } },
   shiver:  { dur: 1.1, run(p, pose) { pose.tremble = Math.max(pose.tremble, 1.2 * (1 - p)); } },
@@ -1009,10 +1009,14 @@ function note(msg) {
   else health.errors = [...health.errors.slice(-9), { at, msg }];
   if (Date.now() - health.savedAt > 10000) { health.savedAt = Date.now(); try { glass.store({ health: { errors: health.errors } }); } catch {} }
 }
+// Each value as of the last frame it was fine: healing goes back to that, not to the rest pose
+// (which, bigger than a sleepy or bored pose, made him swell for a few frames)
+const lastGood = {};
 function healRig() {
   const bad = [];
   for (const key of [...EASED, 'mouthOpen', 'mouthWide', 'impulse', 'shake', 'squint']) {
-    if (!Number.isFinite(rig[key])) { bad.push(key); rig[key] = BASE[key] ?? (key === 'mouthWide' ? 0.75 : 0); }
+    if (Number.isFinite(rig[key])) { lastGood[key] = rig[key]; continue; }
+    bad.push(key); rig[key] = lastGood[key] ?? BASE[key] ?? (key === 'mouthWide' ? 0.75 : 0);
   }
   rig.pal.forEach((c, i) => c.forEach((v, j) => { if (!Number.isFinite(v)) { bad.push('pal'); c[j] = PAL.normal[i][j]; } }));
   for (const sw of swayers) if (!Number.isFinite(sw.ang) || !Number.isFinite(sw.vel)) { bad.push('sway:' + sw.id); sw.ang = sw.vel = 0; }
