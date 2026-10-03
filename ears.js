@@ -57,6 +57,15 @@ function findName(text) {
   }
   // "Cal" for short, but only greeted ("hey Cal") or on its own, so "call the API" isn't him
   if (skeleton(words[i] || '') === 'KL' && (i > 0 || words.length === 1)) return rest(i + 1);
+  // His name at the end of a short utterance calls him too ("You're so bad. Calcifer."): a close
+  // match, nothing much after it, and not a real word that sounds like him (classifier, calls for).
+  // That only wakes him; nothing is sent.
+  if (words.length <= 8)
+    for (let j = i + 1; j < words.length; j++)
+      for (let n = 1; n <= 2 && j + n <= words.length && words.length - (j + n) <= 2; n++) {
+        const w = words.slice(j, j + n).join('').toLowerCase();
+        if (!/^(class|calls)/.test(w) && soundsLikeName(skeleton(w), n) === 'close') return { rest: '' };
+      }
   return null;
 }
 const STOP = /^(please )?(stop listening|stop|go (back )?to sleep|that'?s all|that will be all|good ?night|you can stop|never ?mind)$/;
@@ -271,7 +280,7 @@ async function leaveRoom() {
 }
 
 // ---------- Each frame ----------
-const conv = { silenceSeq: null, usersSeen: null, idleSince: 0, claudeTurnEnded: 0, followUntil: 0 };
+const conv = { silenceSeq: null, usersSeen: null, idleSince: 0, claudeTurnEnded: 0, spokeAt: 0, followUntil: 0 };
 const ears = {
   findName, skeleton, voiceCommand, endsConversation,
   onName: null,
@@ -286,10 +295,12 @@ const ears = {
     const agent = s?.agentStatus?.state || 'idle';
     const usersTurn = agent === 'idle';
     if (!usersTurn) conv.claudeTurnEnded = now;
-    // His wake listener only listens on the user's turn, and not right after Claude spoke. Just
-    // after his name it keeps listening (the follow-up), and the room's mic waits until it's done.
-    const following = posture === 'open' && usersTurn && (now < conv.followUntil || ear.transcribing > 0);
-    ear.armed = (posture === 'wake' && usersTurn && now - conv.claudeTurnEnded > COOLDOWN_MS) || following;
+    if (agent === 'speaking') conv.spokeAt = now;
+    // His wake listener listens except while Claude's voice is playing (and just after), so he can
+    // be called while Claude works but can't wake himself. Just after his name it keeps listening
+    // (the follow-up), and the room's mic waits until it's done.
+    const following = posture === 'open' && agent !== 'speaking' && (now < conv.followUntil || ear.transcribing > 0);
+    ear.armed = (posture === 'wake' && agent !== 'speaking' && now - conv.spokeAt > COOLDOWN_MS) || following;
     if (!ear.armed) ear.rec = null;
 
     // Conversation: in the room while open, out of it otherwise

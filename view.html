@@ -28,7 +28,7 @@
 <script src="glass-app://sdk/glass-app.js"></script>
 <script src="persona/calcifer.js?v=3"></script><!-- bump ?v= when the persona changes -->
 <script src="lipsync.js?v=1"></script><!-- bump ?v= when lip sync changes -->
-<script src="ears.js?v=9"></script><!-- bump ?v= when the ears change -->
+<script src="ears.js?v=10"></script><!-- bump ?v= when the ears change -->
 <script src="assets/sway.js?v=8"></script><!-- bump ?v= when the scene's images change -->
 
 <script>
@@ -561,7 +561,15 @@ const ACTIONS = {
   hop:     { dur: 0.7, run(p) { return { dy: -Math.sin(Math.PI * p) * 0.18 }; } },
   shiver:  { dur: 1.1, run(p, pose) { pose.tremble = Math.max(pose.tremble, 1.2 * (1 - p)); } },
   hum:     { dur: 2.6, run(p, pose, t) { pose.lid = Math.max(pose.lid, 0.45); pose.smileEyes = Math.max(pose.smileEyes, 0.3); pose.lean += 0.05 * Math.sin(p * Math.PI * 6); return { open: 0.05 + 0.06 * (0.5 + 0.5 * Math.sin(p * Math.PI * 8)), wide: 0.45 }; } },
-  nibble:  { dur: 2.2, run(p, pose) { pose.px = 0; pose.py = 0.75; if (p > 0.82) pose.curve = 0.8; return { open: p < 0.82 ? Math.max(0, Math.sin(p * Math.PI * 7.3)) * 0.5 : 0, wide: 0.6 }; } },
+  // Ducks until his mouth sits on the log's top edge (mouth = log top + 0.142 R0 - 0.38 R + dy R0,
+  // from the layout in drawFrame), chews, then comes back up with a smile.
+  nibble:  { dur: 2.6, run(p, pose) {
+    pose.px = 0; pose.py = 0.75; if (p > 0.82) pose.curve = 0.8;
+    const down = Math.max(0, Math.min(1, p / 0.14, (0.9 - p) / 0.12));
+    const ease = down * down * (3 - 2 * down);
+    return { open: p > 0.12 && p < 0.8 ? Math.max(0, Math.sin((p - 0.12) * Math.PI * 9)) * 0.5 : 0, wide: 0.6,
+      dy: ease * Math.max(0, 0.38 * rig.size - 0.16) };
+  } },
   stretch: { dur: 1.8, run(p, pose) { const e = Math.sin(Math.PI * p); pose.size += 0.25 * e; pose.lid = Math.max(pose.lid, 0.3 * e); return { open: 0.1 * e, wide: 0.3 }; } },
   snore:   { dur: 3.2, run(p, pose) { const e = 0.5 - 0.5 * Math.cos(p * Math.PI * 2); pose.size += 0.05 * e; return { open: 0.1 * e, wide: 0.2 }; } },
 };

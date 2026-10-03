@@ -27,8 +27,13 @@ test('his name at the start, after a greeting or not', () => {
 });
 
 test('other speech is not his name', () => {
-  for (const s of ['I think the cat is fine', 'Thank you.', 'The classifier is broken', 'Hey Claude', 'Tell Calcifer hi', 'Call the API', 'Cool, thanks',
-    'Could you search for the file', 'Close the window', 'Clear the screen', 'Check the logs', 'Copy that file']) assert.strictEqual(findName(s), null, s);
+  for (const s of ['I think the cat is fine', 'Thank you.', 'The classifier is broken', 'Hey Claude', 'Call the API', 'Cool, thanks',
+    'Could you search for the file', 'Close the window', 'Clear the screen', 'Check the logs', 'Copy that file',
+    'I think the classifier is broken today', 'That calls for a test']) assert.strictEqual(findName(s), null, s);
+});
+
+test('his name near the end of a short utterance wakes him, sending nothing', () => {
+  for (const s of ["You're so bad. Calcifer.", 'Where are you Calcifer', 'Tell Calcifer hi']) assert.deepStrictEqual(findName(s), { rest: '' }, s);
 });
 
 test('permissive: rougher mishearings wake him too (marked loose, for the ear log)', () => {
