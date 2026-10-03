@@ -31,7 +31,8 @@
 <script src="persona/calcifer.js?v=3"></script><!-- bump ?v= when the persona changes -->
 <script src="lipsync.js?v=1"></script><!-- bump ?v= when lip sync changes -->
 <script src="ears.js?v=13"></script><!-- bump ?v= when the ears change -->
-<script src="sounds.js?v=1"></script><!-- bump ?v= when the sounds change -->
+<script src="assets/sounds/sounds-data.js?v=1"></script><!-- bump ?v= after pack.sh -->
+<script src="sounds.js?v=3"></script><!-- bump ?v= when the sounds change -->
 <script src="assets/sway.js?v=8"></script><!-- bump ?v= when the scene's images change -->
 
 <script>
@@ -1106,7 +1107,7 @@ function drawFrame(now) {
   const ears = window.EARS.tick({ client: feed.client, base: feedBase(), posture, sessionId: feed.sessionId, micDevice: (settings.micDevice || '').trim() });
   if (posture !== 'off' && settings.acks !== false) loadAcks((settings.ackVoice || 'am_calcifer').trim());
   const heard = useAudio ? hear(settings.audioGain ?? 1) : null;
-  status.textContent = useAudio && ear.err ? ear.err : feed.err && (mode === 'feed' || posture !== 'off') ? feed.err : ears.err;
+  status.textContent = useAudio && ear.err ? ear.err : feed.err && (mode === 'feed' || posture !== 'off') ? feed.err : ears.err || window.SOUNDS?.err || '';
   let talking = false, syl = null, sylT = 0, item = null;
   if (mode === 'text') {
     while (queue.length && now > queue[0].start + queue[0].plan.dur * 1000 + 300) queue.shift();
