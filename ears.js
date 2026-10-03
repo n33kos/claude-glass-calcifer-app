@@ -78,13 +78,37 @@ function voiceCommand(rest) {
 
 // ---------- The mic, for his wake listener and his ear-glow ----------
 const ear = { want: false, stream: null, ctx: null, proc: null, level: 0, floor: 0.004, pre: [], rec: null,
-  armed: false, transcribing: 0, heardAt: 0, err: '', opening: null };
+  armed: false, transcribing: 0, heardAt: 0, err: '', opening: null, choice: null, deviceId: '', label: '' };
+// Which mic: the setting's name (or any part of it, "AirPods"), else the most reasonable one: the
+// system default unless that's a loopback or virtual device (his own "Calcifer System Audio",
+// BlackHole...), then the built-in mic, then any real one.
+const VIRTUAL = /system audio|blackhole|loopback|aggregate|soundflower|virtual|background music|zoomaudio|teams audio/i;
+async function pickMic(want) {
+  const all = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput');
+  const inputs = all.filter((d) => d.deviceId !== 'default' && d.deviceId !== 'communications');
+  if (want) {
+    const hit = inputs.find((d) => d.label.toLowerCase().includes(want.toLowerCase()));
+    if (hit) return { device: hit };
+    return { device: null, err: `No microphone matches "${want}" (inputs: ${inputs.map((d) => d.label).join(', ')})` };
+  }
+  const defLabel = (all.find((d) => d.deviceId === 'default')?.label || '').replace(/^Default\s*-\s*/i, '');
+  const real = inputs.filter((d) => !VIRTUAL.test(d.label));
+  return { device: real.find((d) => d.label === defLabel) || real.find((d) => /built-in|macbook/i.test(d.label)) || real[0] || inputs[0] || null };
+}
 async function openMic() {
   if (ear.stream || ear.opening) return;
+  const choice = ear.choice;
   ear.opening = (async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-      if (!ear.want) { stream.getTracks().forEach((t) => t.stop()); return; }
+      const voice = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+      let stream = await navigator.mediaDevices.getUserMedia({ audio: voice }); // also unlocks device names
+      const { device, err } = await pickMic(choice);
+      if (device && stream.getAudioTracks()[0]?.getSettings().deviceId !== device.deviceId) {
+        stream.getTracks().forEach((t) => t.stop());
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { ...voice, deviceId: { exact: device.deviceId } } });
+      }
+      if (!ear.want || ear.choice !== choice) { stream.getTracks().forEach((t) => t.stop()); return; }
+      Object.assign(ear, { deviceId: device?.deviceId || '', label: device?.label || 'default input' });
       const ctx = new AudioContext();
       const src = ctx.createMediaStreamSource(stream);
       const proc = ctx.createScriptProcessor(2048, 1, 1);
@@ -93,7 +117,7 @@ async function openMic() {
       proc.onaudioprocess = (e) => onBlock(e.inputBuffer.getChannelData(0), ctx.sampleRate);
       for (const t of stream.getAudioTracks()) t.addEventListener('ended', () => { closeMic(); });
       ctx.resume?.();
-      Object.assign(ear, { stream, ctx, proc, err: '' });
+      Object.assign(ear, { stream, ctx, proc, err: err || '' });
     } catch (e) { ear.err = `Mic: ${e?.message || e}`; }
     finally { ear.opening = null; }
   })();
@@ -214,6 +238,13 @@ async function joinRoom(client, base) {
     const voice = new window.VmuxVoice.VoiceClient(client, { mode: 'full', playAgentAudio: false });
     voice.on('micEnabled', (on) => { room.live = on; });
     await voice.join();
+    // The same mic his ear uses (the LiveKit room is the VoiceClient's own, not in its API)
+    const lk = voice.room, deviceId = ear.deviceId;
+    if (lk && deviceId) {
+      lk.options.audioCaptureDefaults = { ...lk.options.audioCaptureDefaults, deviceId };
+      await lk.switchActiveDevice('audioinput', deviceId).catch(() => {});
+    }
+    room.deviceId = deviceId;
     const turn = new window.VmuxClient.VoiceTurn('active');
     const follow = () => {
       const s = client.getState();
@@ -241,8 +272,10 @@ const ears = {
   findName, skeleton, voiceCommand, endsConversation,
   onName: null,
   // ctx: { client, base, posture, sessionId }; returns what the scene shows.
-  tick({ client, base, posture, sessionId }) {
+  tick({ client, base, posture, sessionId, micDevice = '' }) {
     const now = performance.now();
+    if (ear.choice !== micDevice) { ear.choice = micDevice; closeMic(); }   // a different mic chosen
+    if (room.voice && !room.busy && ear.deviceId && room.deviceId !== ear.deviceId) leaveRoom(); // rejoin on it
     ear.want = posture !== 'off';
     if (ear.want) openMic(); else if (ear.stream) closeMic();
     const s = client?.getState();
@@ -286,7 +319,7 @@ const ears = {
       : following ? 'listening'
       : !room.voice ? 'joining'
       : room.live ? 'listening' : 'waiting';
-    return { phase, level: Math.min(1, ear.level), err: ear.err || room.err };
+    return { phase, level: Math.min(1, ear.level), err: ear.err || room.err, mic: ear.label };
   },
   onCommand: null,
 };

@@ -28,7 +28,7 @@
 <script src="glass-app://sdk/glass-app.js"></script>
 <script src="persona/calcifer.js?v=3"></script><!-- bump ?v= when the persona changes -->
 <script src="lipsync.js?v=1"></script><!-- bump ?v= when lip sync changes -->
-<script src="ears.js?v=7"></script><!-- bump ?v= when the ears change -->
+<script src="ears.js?v=8"></script><!-- bump ?v= when the ears change -->
 <script src="assets/sway.js?v=8"></script><!-- bump ?v= when the scene's images change -->
 
 <script>
@@ -868,7 +868,7 @@ function drawAshes(S, ears, t, dt) {
   if (hit.hover === 'ear') {
     c.font = `500 ${Math.max(11, Math.min(14, r * 1.1))}px ${getComputedStyle(document.body).getPropertyValue('--font-sans') || 'system-ui'}`;
     c.textAlign = 'center'; c.textBaseline = 'bottom';
-    const tip = EAR_TIP[ph] || '', tx = Math.min(innerWidth - 8 - c.measureText(tip).width / 2, Math.max(8 + c.measureText(tip).width / 2, x));
+    const tip = (EAR_TIP[ph] || '') + (ph !== 'off' && ears.mic ? ` · ${ears.mic}` : ''), tx = Math.min(innerWidth - 8 - c.measureText(tip).width / 2, Math.max(8 + c.measureText(tip).width / 2, x));
     c.shadowColor = '#000'; c.shadowBlur = 6; c.fillStyle = '#ffe9c4';
     c.fillText(tip, tx, y - r * 2.4);
   } else if (hit.hover === 'fire') {
@@ -1012,7 +1012,7 @@ function drawFrame(now) {
   // Muted: his voice goes silent (the player keeps its clock, so he still mouths the words)
   const silent = muted || !settings.feedPlayAudio;
   if (feed.player && feed.muted !== silent) { feed.player.setMuted(silent); feed.muted = silent; }
-  const ears = window.EARS.tick({ client: feed.client, base: feedBase(), posture, sessionId: feed.sessionId });
+  const ears = window.EARS.tick({ client: feed.client, base: feedBase(), posture, sessionId: feed.sessionId, micDevice: (settings.micDevice || '').trim() });
   const heard = useAudio ? hear(settings.audioGain ?? 1) : null;
   status.textContent = useAudio && ear.err ? ear.err : feed.err && (mode === 'feed' || posture !== 'off') ? feed.err : ears.err;
   let talking = false, syl = null, sylT = 0, item = null;

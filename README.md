@@ -54,6 +54,7 @@ Settings → Apps → Calcifer:
 | Setting | |
 |---|---|
 | Claude speaks as Calcifer | the persona in Claude's instructions (on by default) |
+| Your microphone | the mic he listens to (any part of its name, e.g. `AirPods`); blank: the system default, skipping loopback devices (then the built-in mic). Hover the ash to see which one |
 | Lip sync from | `text` (the reply text), `input` (an audio input), `both`, `feed` (a speech feed, below) |
 | Speech feed URL, session | for `feed`: where the feed is (default the local vmux relay) and which session (blank: this project) |
 | Play Claude's voice himself | for `feed`: he plays the audio (exact sync; mute other players) or stays silent and follows them |
