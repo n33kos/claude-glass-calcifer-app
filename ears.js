@@ -21,7 +21,7 @@ const MAX_CLIP_MS = 7000;
 // compared by how they sound: their consonant skeleton. Calcifer, Call Cypher, Kels4 -> KLSFR.
 function skeleton(s) {
   return String(s).toLowerCase().replace(/4/g, 'for').replace(/[^a-z]/g, '')
-    .replace(/ph/g, 'f').replace(/c(?=[eiy])/g, 's').replace(/[cqgk]/g, 'k').replace(/v/g, 'f')
+    .replace(/ph/g, 'f').replace(/c(?=[eiy])/g, 's').replace(/[cqgk]/g, 'k').replace(/[vbp]/g, 'f') // "C saber"
     .replace(/z/g, 's').replace(/x/g, 'ks').replace(/[aeiouyhw]/g, '')
     .replace(/(.)\1+/g, '$1').toUpperCase();
 }

@@ -10,6 +10,10 @@ test('Whisper\'s mishearings of his name sound alike', () => {
   for (const s of ['Calcifer', 'Call Cypher', 'Call Cipher', 'Cal Sifer', 'Kels4', 'Kelsifer']) assert.strictEqual(skeleton(s), 'KLSFR', s);
 });
 
+test('what Whisper heard when the user said his name over and over', () => {
+  for (const s of ['Calcifer', 'C saber', 'Calcer flew', 'C hobbies for you', 'Cal saber']) assert.ok(findName(s), s);
+});
+
 test('his name at the start, after a greeting or not', () => {
   assert.deepStrictEqual(findName('Call Cypher. Are you there?'), { rest: 'Are you there?' });
   assert.deepStrictEqual(findName('Hey call Cipher'), { rest: '' });
