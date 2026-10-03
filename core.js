@@ -47,7 +47,16 @@ exports.init = () => ({
 const bump = (state) => state.seq + 1;
 const withCue = (state, name, extra = {}) => { const seq = bump(state); return { ...state, ...extra, seq, cue: { name, seq, tool: extra.tool ?? state.tool } }; };
 
-exports.command = (state, command, args) => {
+const MIC = ['off', 'wake', 'open'];
+const truthy = (v) => v === true || /^(true|1|on|yes)$/i.test(String(v ?? 'true'));
+
+exports.command = (state, command, args, ctx) => {
+  if (command === 'mic') {
+    const mode = String(args.mode ?? '').toLowerCase();
+    if (!MIC.includes(mode)) throw new Error(`calcifer: mic --mode is one of ${MIC.join(', ')}`);
+    return ctx.store(state, { mic: mode });
+  }
+  if (command === 'mute') return ctx.store(state, { muted: truthy(args.on) });
   if (command === 'mood') {
     const mood = String(args.mood ?? '').toLowerCase();
     if (!MOODS.includes(mood)) throw new Error(`calcifer: mood is one of ${MOODS.join(', ')}`);

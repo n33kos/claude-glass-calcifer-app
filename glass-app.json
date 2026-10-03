@@ -10,10 +10,14 @@
     "mood": { "usage": "mood --mood <neutral|happy|grumpy|angry|sad|scared|thinking|sleepy|smug|excited> [--for <seconds>]", "help": "Set Calcifer's expression (held until changed, or for --for seconds)" },
     "react": { "usage": "react --kind <flare|sputter|sparks|wince>", "help": "A one-shot reaction: flare up, sputter low, throw sparks, wince" },
     "say": { "usage": "say --text <text>", "help": "Make him mouth some text now (speech normally follows your replies by itself)" },
-    "hush": { "usage": "hush", "help": "Stop talking" }
+    "hush": { "usage": "hush", "help": "Stop talking" },
+    "mic": { "usage": "mic --mode <off|wake|open>", "help": "The user's mic: off, wake (he listens for his name), or open (a conversation)" },
+    "mute": { "usage": "mute --on <true|false>", "help": "Mute or unmute his voice (he still mouths the words)" }
   },
-  "permissions": { "microphone": true, "storage": true, "network": ["http://localhost:3100", "ws://localhost:3100"] },
+  "permissions": { "microphone": true, "storage": true, "network": ["http://localhost:3100", "ws://localhost:3100", "http://localhost:8100"] },
   "stored": {
+    "mic": { "scope": "project", "default": "off" },
+    "muted": { "scope": "global", "default": false },
     "inputDevice": { "scope": "global", "default": "" },
     "health": { "scope": "global", "default": {} },
     "feedToken": { "scope": "global", "default": "" }

@@ -28,6 +28,9 @@ replies are spoken.
   long enough he gets bored, sleepy, and falls asleep (and startles awake).
 - **Lip sync.** From the reply text (default), from any audio input, or both: the audio for
   timing and loudness, the text for the vowel shapes.
+- **Your voice channel.** With vmux running he plays Claude's voice and listens to you himself,
+  no vmux pane needed: say "Calcifer" to talk, "Calcifer, stop listening" when you're done. The
+  ash in front of his log glows while he listens. Click him to mute him.
 - **The room.** A painted hearth he lights up (blue when he's sad); herbs that sway when a breeze
   drifts through and swing away when he flares up.
 - **Persona.** Optionally, Claude speaks as Calcifer. Everything that makes him *him* (moods,
@@ -71,7 +74,7 @@ scaled by how loud the voice actually is.
 **With [vmux](https://github.com/n33kos/claude-voice-multiplexer)** (v5+), the relay is a feed:
 
 ```sh
-vmux token Calcifer                      # a listen-only token (can't send or run anything)
+vmux token Calcifer --scope speak        # speak: he can use your mic (listen: lip sync only)
 claude-glass stored calcifer set feedToken '"<token>"'
 claude-glass settings set app.calcifer.audioSource feed
 ```
@@ -79,6 +82,32 @@ claude-glass settings set app.calcifer.audioSource feed
 He follows this project's session. If the vmux pane plays the voice, leave *Play Claude's voice
 himself* off (his clock waits *Voice delay* to match it); for him alone (say, full screen), turn
 it on and he plays it himself in exact sync.
+
+### Talking to him (no vmux pane)
+
+With a `speak` token he's the whole voice channel. The mic has three states, kept per project:
+
+| | |
+|---|---|
+| off | nothing listens (the mic isn't open) |
+| wake | he listens for his name: each burst of speech goes to vmux's local Whisper, and only his name does anything |
+| open | a conversation: your mic is live on your turn and closed during Claude's, as in the vmux pane |
+
+- **"Calcifer"** (or "hey Cal") opens a conversation. Say more in the same breath ("Calcifer, run
+  the tests") or right after, and it goes to Claude at once.
+- **"Calcifer, stop listening"** (or "go to sleep", "that's all"), the relay's silence timeout, or a
+  quiet minute goes back to wake. **"Calcifer, hush"** / **"speak up"** mute and unmute him.
+- **The ash pile** in front of his log is his ear: cold when the mic is off, a few coals breathing
+  while he waits for his name, the whole bed glowing (and sparking with your voice) in a
+  conversation. Click it to start or end a conversation; right-click for mic off. Click **him** to
+  mute his voice (he burns low and keeps mouthing the words).
+- Claude can set them too: `claude-glass app calcifer mic --mode off|wake|open`,
+  `claude-glass app calcifer mute --on true|false`.
+
+Whisper rarely spells him right ("Call Cypher", "Kels4"), so his name is matched by its consonant
+sounds (KLSFR), and only at the start of what you say: `ears.js`, tested by `node --test test/*.test.js`.
+The wake path posts audio straight to Whisper on `localhost:8100`, the one call that doesn't go
+through the relay. The mic library is the relay's `/sdk/vmux-voice.js` (vmux v5+).
 
 **Any other source** can drive him by speaking the same small protocol over a WebSocket at
 `<feed URL>/ws/client` (add the URL's origins to `permissions.network` in `glass-app.json`):
