@@ -21,6 +21,7 @@
     "inputDevice": { "scope": "global", "default": "" },
     "health": { "scope": "global", "default": {} },
     "earLog": { "scope": "global", "default": [] },
+    "earStatus": { "scope": "global", "default": {} },
     "feedToken": { "scope": "global", "default": "" }
   },
   "settings": {
@@ -39,6 +40,8 @@
     "speechRate": { "type": "number", "label": "Speech speed (characters per second)", "default": 15, "min": 5, "max": 40 },
     "speechDelay": { "type": "number", "label": "Delay before talking (ms, TTS latency)", "default": 700, "min": 0, "max": 5000 },
     "subtitles": { "type": "bool", "label": "Show subtitles", "default": false },
+    "subtitleSize": { "type": "number", "label": "Subtitle size (%)", "default": 100, "min": 50, "max": 250 },
+    "subtitleColor": { "type": "color", "label": "Subtitle color", "default": "#fff3cf" },
     "hearth": { "type": "bool", "label": "Draw the fireplace", "default": true }
   }
 }

@@ -92,17 +92,24 @@ const ear = { want: false, stream: null, ctx: null, proc: null, level: 0, floor:
 // system default unless that's a loopback or virtual device (his own "Calcifer System Audio",
 // BlackHole...), then the built-in mic, then any real one.
 const VIRTUAL = /system audio|blackhole|loopback|aggregate|soundflower|virtual|background music|zoomaudio|teams audio/i;
+// A mic that went quiet for good: macOS keeps listing an iPhone (Continuity) or Bluetooth mic that
+// has gone out of range, and it delivers exact digital silence. It's skipped for a minute (or
+// until devices change), then tried again.
+const dead = { label: '', until: 0 };
+navigator.mediaDevices?.addEventListener?.('devicechange', () => { dead.until = 0; if (ear.stream) closeMic(); });
 async function pickMic(want) {
   const all = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput');
+  const alive = (d) => !(d.label === dead.label && performance.now() < dead.until);
   const inputs = all.filter((d) => d.deviceId !== 'default' && d.deviceId !== 'communications');
+  let err = '';
   if (want) {
     const hit = inputs.find((d) => d.label.toLowerCase().includes(want.toLowerCase()));
-    if (hit) return { device: hit };
-    return { device: null, err: `No microphone matches "${want}" (inputs: ${inputs.map((d) => d.label).join(', ')})` };
+    if (hit && alive(hit)) return { device: hit };
+    err = hit ? `${hit.label} is silent (out of range?): using another mic` : `No microphone matches "${want}": using another mic`;
   }
   const defLabel = (all.find((d) => d.deviceId === 'default')?.label || '').replace(/^Default\s*-\s*/i, '');
-  const real = inputs.filter((d) => !VIRTUAL.test(d.label));
-  return { device: real.find((d) => d.label === defLabel) || real.find((d) => /built-in|macbook/i.test(d.label)) || real[0] || inputs[0] || null };
+  const real = inputs.filter((d) => !VIRTUAL.test(d.label) && alive(d));
+  return { err, device: real.find((d) => d.label === defLabel) || real.find((d) => /built-in|macbook/i.test(d.label)) || real[0] || inputs.find(alive) || null };
 }
 async function openMic() {
   if (ear.stream || ear.opening) return;
@@ -126,7 +133,7 @@ async function openMic() {
       proc.onaudioprocess = (e) => onBlock(e.inputBuffer.getChannelData(0), ctx.sampleRate);
       for (const t of stream.getAudioTracks()) t.addEventListener('ended', () => { closeMic(); });
       ctx.resume?.();
-      Object.assign(ear, { stream, ctx, proc, err: err || '' });
+      Object.assign(ear, { stream, ctx, proc, err: '', note: err || '' }); // note: shown on hover, not on screen
     } catch (e) { ear.err = `Mic: ${e?.message || e}`; }
     finally { ear.opening = null; }
   })();
@@ -135,7 +142,7 @@ function closeMic() {
   ear.stream?.getTracks().forEach((t) => t.stop());
   ear.proc && (ear.proc.onaudioprocess = null);
   ear.ctx?.close?.();
-  Object.assign(ear, { stream: null, ctx: null, proc: null, rec: null, pre: [], level: 0 });
+  Object.assign(ear, { stream: null, ctx: null, proc: null, rec: null, pre: [], level: 0, zeroMs: 0 });
 }
 // Every ~40 ms of mic: track loudness, and cut bursts of speech into clips (with a little audio
 // from just before, so the first consonant isn't lost).
@@ -143,7 +150,8 @@ function onBlock(x, rate) {
   let sum = 0; for (let i = 0; i < x.length; i++) sum += x[i] * x[i];
   const rms = Math.sqrt(sum / x.length), ms = (x.length / rate) * 1000;
   ear.level = Math.max(rms * 8, ear.level * 0.82);
-  if (!ear.rec) ear.floor = rms < ear.floor ? ear.floor * 0.9 + rms * 0.1 : ear.floor * 1.0008;
+  ear.zeroMs = rms === 0 ? (ear.zeroMs || 0) + ms : 0;  // exact zeros: a dead device, not a quiet room
+  if (!ear.rec) ear.floor = Math.max(1e-4, rms < ear.floor ? ear.floor * 0.9 + rms * 0.1 : ear.floor * 1.0008);
   const loud = rms > Math.max(0.012, ear.floor * 3);
   if (loud) ear.heardAt = performance.now();
   const block = new Float32Array(x);
@@ -211,7 +219,8 @@ async function transcribe({ blocks, rate }) {
   fd.append('prompt', 'Calcifer, the fire demon.');
   fd.append('temperature', '0');
   fd.append('response_format', 'json');
-  const res = await fetch(WHISPER_URL, { method: 'POST', body: fd });
+  // Clips are transcribed one at a time, so a request that never answers would deafen him for good
+  const res = await fetch(WHISPER_URL, { method: 'POST', body: fd, signal: AbortSignal.timeout(15000) });
   if (!res.ok) throw new Error(`Whisper answered ${res.status}`);
   ear.err = '';
   return String((await res.json()).text || '').trim();
@@ -285,7 +294,7 @@ async function leaveRoom() {
 }
 
 // ---------- Each frame ----------
-const conv = { silenceSeq: null, usersSeen: null, idleSince: 0, claudeTurnEnded: 0, spokeAt: 0, followUntil: 0 };
+const conv = { silenceSeq: null, usersSeen: null, idleSince: 0, claudeTurnEnded: 0, spokeAt: 0, followUntil: 0, statusAt: 0 };
 const ears = {
   findName, skeleton, voiceCommand, endsConversation,
   onName: null,
@@ -293,6 +302,11 @@ const ears = {
   tick({ client, base, posture, sessionId, micDevice = '' }) {
     const now = performance.now();
     if (ear.choice !== micDevice) { ear.choice = micDevice; closeMic(); }   // a different mic chosen
+    if (ear.stream && ear.zeroMs > 3000) {                                   // its mic went dead: switch
+      Object.assign(dead, { label: ear.label, until: now + 60000 });
+      ear.zeroMs = 0; closeMic();
+    }
+    if (dead.until && now > dead.until && ear.stream && ear.label !== dead.label && ear.choice) { dead.until = 0; closeMic(); } // retry the chosen one
     if (room.voice && !room.busy && ear.deviceId && room.deviceId !== ear.deviceId) leaveRoom(); // rejoin on it
     ear.want = posture !== 'off';
     if (ear.want) openMic(); else if (ear.stream) closeMic();
@@ -339,7 +353,15 @@ const ears = {
       : following ? 'listening'
       : !room.voice ? 'joining'
       : room.live ? 'listening' : 'waiting';
-    return { phase, level: Math.min(1, ear.level), err: ear.err || room.err, mic: ear.label };
+    // Why he is or isn't listening, for `claude-glass stored calcifer` (earStatus), every few seconds
+    if (now - conv.statusAt > 3000) {
+      conv.statusAt = now;
+      ears.onStatus?.({ at: new Date().toISOString(), posture, phase, agent, armed: ear.armed, micOpen: !!ear.stream,
+        mic: ear.label, recording: !!ear.rec, transcribing: ear.transcribing, level: +ear.level.toFixed(3),
+        floor: +ear.floor.toFixed(4), room: room.voice ? (room.live ? 'mic live' : 'joined') : room.busy ? 'joining' : 'none',
+        relay: s ? (s.connectedSessionId === sessionId ? 'connected' : `session ${s.connectedSessionId}`) : 'no client', note: ear.note || '', err: ear.err || room.err || '' });
+    }
+    return { phase, level: Math.min(1, ear.level), err: ear.err || room.err, mic: ear.note ? `${ear.label} (${ear.note})` : ear.label };
   },
   onCommand: null,
 };
