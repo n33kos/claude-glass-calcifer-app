@@ -32,7 +32,16 @@ function lev(a, b) {
     d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
   return d[a.length][b.length];
 }
-const soundsLikeName = (sk) => sk[0] === 'K' && sk.length >= 4 && (sk.startsWith(NAME) || (sk.length <= 6 && lev(sk, NAME) <= 1));
+// Leaning permissive (the user would rather mute the mic than repeat his name): close matches over
+// up to three words, and looser ones ("'cause first", two edits off) over at most two, so a
+// sentence like "could you search for..." doesn't count.
+// 'close' | 'loose' | false. A loose match wakes him but what follows isn't sent ("clean up the branch").
+function soundsLikeName(sk, words) {
+  if (sk[0] !== 'K' || sk.length < 4) return false;
+  if (sk.startsWith(NAME) || (sk.length <= 6 && lev(sk, NAME) <= 1)) return 'close';
+  if (words <= 2 && sk.slice(1).includes('F') && lev(sk.slice(0, NAME.length), NAME) <= 2) return 'loose'; // the "-cifer" F, so not "close the"
+  return false;
+}
 // Addressed to him: his name first (after a greeting, if any). { rest } is what came after it.
 // Only at the start, so "the classifier is broken" doesn't count.
 const GREETING = /^(hey|hi|hello|ok|okay|oh|yo|um|uh|so|alright)$/;
@@ -40,9 +49,11 @@ function findName(text) {
   const words = String(text).trim().split(/\s+/).filter(Boolean);
   let i = 0;
   while (i < words.length - 1 && i < 2 && GREETING.test(words[i].toLowerCase().replace(/[^a-z]/g, ''))) i++;
-  const rest = (k) => ({ rest: words.slice(k).join(' ').replace(/^[\s,.!?;:—–-]+/, '').trim() });
-  for (let n = 1; n <= 3 && i + n <= words.length; n++)
-    if (soundsLikeName(skeleton(words.slice(i, i + n).join('')))) return rest(i + n);
+  const rest = (k, loose = false) => ({ rest: words.slice(k).join(' ').replace(/^[\s,.!?;:—–-]+/, '').trim(), ...(loose ? { loose } : {}) });
+  for (let n = 1; n <= 3 && i + n <= words.length; n++) {
+    const m = soundsLikeName(skeleton(words.slice(i, i + n).join('')), n);
+    if (m) return rest(i + n, m === 'loose');
+  }
   // "Cal" for short, but only greeted ("hey Cal") or on its own, so "call the API" isn't him
   if (skeleton(words[i] || '') === 'KL' && (i > 0 || words.length === 1)) return rest(i + 1);
   return null;
@@ -128,8 +139,9 @@ function heard(clip) {
       if (!text) return;
       const m = findName(text);
       if (m) {
-        if (!m.rest) conv.followUntil = performance.now() + FOLLOW_MS;
-        ears.onName?.(m.rest, text);
+        const rest = m.loose && !voiceCommand(m.rest) ? '' : m.rest; // a loose match only wakes him
+        if (!rest) conv.followUntil = performance.now() + FOLLOW_MS;
+        ears.onName?.(rest, text);
       } else if (clip.startedAt < conv.followUntil && !/^\W*(thank you|thanks|you)\W*$/i.test(text)) {
         conv.followUntil = 0;
         ears.onFollow?.(text);
