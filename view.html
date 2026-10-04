@@ -21,7 +21,7 @@
 <div id="sub"></div>
 <div id="status"></div>
 <script src="glass-app://sdk/glass-app.js"></script>
-<script src="persona/calcifer.js?v=3"></script><!-- bump ?v= when the persona changes -->
+<script src="persona/calcifer.js?v=4"></script><!-- bump ?v= when the persona changes -->
 <script src="lipsync.js?v=1"></script><!-- bump ?v= when lip sync changes -->
 <script src="ears.js?v=25"></script><!-- bump ?v= when the ears change -->
 <script src="sounds.js?v=4"></script><!-- bump ?v= when the sounds change -->
@@ -853,7 +853,10 @@ function drawArms(cx, logTop, logH, R, t, talking, lift = 0, faceX = cx, faceY =
     const hx = cx + side * R * reach, hy = logTop + logH * (0.22 - pat);
     const kx = cx + side * R * 0.7, ky = logTop + logH * 0.04;  // the bend: a gentle bow, not a hook
     // A tapered lobe of his own flame: wide where it leaves his body, narrowing to a round paw.
-    const N = 14, w0 = R * 0.28, w1 = R * 0.2, pts = [];
+    // Thickness only. Their vertical reach is anchored to the log (hy/ky below) so the paws grip
+    // its front face, and slimming is the one way to make them read lighter against a smaller body
+    // without lifting his hands off it.
+    const N = 14, w0 = R * 0.245, w1 = R * 0.175, pts = [];
     for (let i = 0; i <= N; i++) {
       const u = i / N, a1 = 1 - u;
       const x = a1 * a1 * sx + 2 * a1 * u * kx + u * u * hx, y = a1 * a1 * sy + 2 * a1 * u * ky + u * u * hy;

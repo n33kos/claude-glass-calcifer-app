@@ -28,7 +28,7 @@ window.PERSONA = {
 
   // All mood sizes are multiplied by this: at rest he sits inside the hearth, and only working
   // (focused), excitement or anger make him tower.
-  scale: 0.86,
+  scale: 0.72,
   base: { size: 1, lean: 0, sway: 1, heat: 'normal', eye: 1, tall: 1, lid: 0, tilt: 0, smileEyes: 0, pupil: 1,
     px: 0, py: 0, open: 0, wide: 0.8, curve: 0.25, teeth: 0, embers: 0.3, tremble: 0, hug: 0.5 },
 
