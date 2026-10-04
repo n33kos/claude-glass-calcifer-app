@@ -12,12 +12,6 @@
     color: var(--sub-color, #fff3cf); text-wrap: balance;
     text-shadow: 0 1px 3px #000, 0 0 12px rgba(0,0,0,.8); pointer-events: none; opacity: 0; transition: opacity .25s; }
   #sub.on { opacity: 1; }
-  /* Audio input picker: only in "input" mode, and only visible while hovering the window. */
-  #device { position: fixed; right: 10px; top: 8px; max-width: 60%; font: 12px var(--font-sans, system-ui);
-    color: #ffe9c4; background: rgba(20, 12, 10, 0.7); border: 1px solid rgba(255, 200, 150, 0.25);
-    border-radius: 6px; padding: 3px 6px; opacity: 0; transition: opacity .2s; display: none; }
-  #device.on { display: block; }
-  body:hover #device { opacity: 1; }
   #status { position: fixed; left: 10px; top: 8px; right: 10px; font: 12px/1.3 var(--font-sans, system-ui);
     color: #ffcf9e; text-shadow: 0 1px 2px #000; pointer-events: none; }
 </style>
@@ -26,13 +20,14 @@
 <canvas id="view"></canvas>
 <div id="sub"></div>
 <div id="status"></div>
-<select id="device" title="Audio input he listens to"></select>
 <script src="glass-app://sdk/glass-app.js"></script>
 <script src="persona/calcifer.js?v=3"></script><!-- bump ?v= when the persona changes -->
 <script src="lipsync.js?v=1"></script><!-- bump ?v= when lip sync changes -->
-<script src="ears.js?v=13"></script><!-- bump ?v= when the ears change -->
+<script src="ears.js?v=25"></script><!-- bump ?v= when the ears change -->
 <script src="sounds.js?v=4"></script><!-- bump ?v= when the sounds change -->
-<script src="assets/sway.js?v=8"></script><!-- bump ?v= when the scene's images change -->
+<script src="vendor/ort/ort.wasm.min.js"></script><!-- ONNX Runtime Web, wasm only (vendored, 1.30.0) -->
+<script src="wake/spotter.js?v=5"></script><!-- hears his name locally; bump ?v= when it changes -->
+<script src="assets/sway.js?v=9"></script><!-- bump ?v= when the scene's images change -->
 
 <script>
 /*
@@ -69,121 +64,14 @@ const CORE_LIGHT = [1.0, 0.95, 0.68];
 const BODY_ALPHA = 0.85; // his flame (body and arms); the face layer has its own opacity in CSS
 const EASED = ['size', 'lean', 'sway', 'eye', 'tall', 'lid', 'tilt', 'smileEyes', 'pupil', 'px', 'py', 'open', 'wide', 'curve', 'teeth', 'embers', 'tremble', 'hug'];
 
-// ---------- Speech: text -> syllables with visemes -> mouth ----------
-function cleanText(t) {
-  return t.replace(/```[\s\S]*?```/g, ' ').replace(/`([^`]*)`/g, '$1').replace(/https?:\/\/\S+/g, 'link')
-    .replace(/[#*_>|~\[\]()]/g, ' ').replace(/\s+/g, ' ').trim();
-}
-// Vowel sounds from spelling, and phoneme-driven mouth shapes: lipsync.js
-const { SOUND, vowelSounds } = window.LIPSYNC;
-// The text as a timeline of syllables (each with a mouth shape) and pauses (punctuation).
-function plan(text, rate) {
-  const syl = [], pauses = []; let t = 0; const per = 1 / rate;
-  for (const tok of cleanText(text).split(/(\s+|[.,!?;:—–-]+)/)) {
-    if (!tok) continue;
-    if (/^\s+$/.test(tok)) { t += per; continue; }
-    if (/^[.!?]+$/.test(tok)) { pauses.push(t); t += 0.42; continue; }
-    if (/^[,;:—–-]+$/.test(tok)) { pauses.push(t); t += 0.22; continue; }
-    const sounds = vowelSounds(tok);
-    if (!sounds.length) continue;
-    const n = sounds.length, dur = Math.max(0.13 * n, tok.length * per);
-    const lipStart = /^[mbpw]/i.test(tok); // lips pressed (or pursed) before the first vowel
-    sounds.forEach((s, i) => {
-      const [o, w] = SOUND[s];
-      syl.push({ t0: t + (dur / n) * i, d: dur / n, a: o * (0.75 + Math.random() * 0.25), w, press: lipStart && i === 0 });
-    });
-    t += dur;
-  }
-  return { syl, pauses, dur: t };
-}
-// Subtitle lines for the estimated timeline (text mode): short lines (shortLines, below), each
-// starting at its share of the time by length.
-function chunks(text, total) {
-  const words = cleanText(text).split(' ').filter(Boolean);
-  const len = words.reduce((a, w) => a + w.length + 1, 0) || 1; let at = 0;
-  const timed = words.map((w) => { const x = { text: w, start: (at / len) * total }; at += w.length + 1; return x; });
-  return shortLines(timed).map((l) => ({ t0: l.start, text: l.text }));
-}
-
-// ---------- Live audio: any input device ----------
-// A mic, or a loopback device (BlackHole and friends) carrying the system's output, so he can
-// talk along with anything that plays: vmux, a video, another app. Nothing here knows the source.
-const ear = { want: null, ctx: null, an: null, stream: null, td: null, fd: null, floor: 0.003, err: '', heardAt: 0 };
-async function listen(hint) {
-  if (ear.want === hint) return;
-  ear.want = hint;
-  stopListening();
-  if (!hint) return;
-  try {
-    const raw = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
-    let stream = await navigator.mediaDevices.getUserMedia({ audio: raw }); // also unlocks device labels
-    fillPicker(true);
-    if (hint !== 'default') {
-      const inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput');
-      const dev = inputs.find((d) => d.label === hint);
-      stream.getTracks().forEach((t) => t.stop());
-      if (!dev) throw new Error(`No audio input matches "${hint}". Inputs: ${inputs.map((d) => d.label).join(', ')}`);
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { ...raw, deviceId: { exact: dev.deviceId } } });
-    }
-    if (ear.want !== hint) { stream.getTracks().forEach((t) => t.stop()); return; } // changed meanwhile
-    const ctx = new AudioContext();
-    const an = ctx.createAnalyser(); an.fftSize = 2048; an.smoothingTimeConstant = 0.25;
-    ctx.createMediaStreamSource(stream).connect(an); // analysed only, never played
-    // If the input goes away (sleep, the device disappearing), open it again shortly.
-    for (const track of stream.getAudioTracks()) track.addEventListener('ended', () => { setTimeout(() => { if (ear.want === hint) { ear.want = null; } }, 1000); });
-    ctx.resume?.();
-    Object.assign(ear, { ctx, an, stream, td: new Float32Array(an.fftSize), fd: new Float32Array(an.frequencyBinCount), err: '' });
-  } catch (e) {
-    ear.err = String(e?.message || e);
-  }
-}
-// The picker lists the audio inputs this machine has (names appear once the mic is allowed).
-// The choice is saved by name as a stored value, so it follows the user to every glass.
-const picker = document.getElementById('device');
-let pickerKey = '';
-async function fillPicker(force) {
-  let inputs = [];
-  try { inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput' && d.deviceId !== 'default'); } catch {}
-  const chosen = stored.inputDevice || '';
-  const key = chosen + '|' + inputs.map((d) => d.label).join('|');
-  if (key === pickerKey && !force) return;
-  pickerKey = key;
-  picker.replaceChildren(new Option('System default input', ''),
-    ...inputs.map((d, i) => new Option(d.label || `Input ${i + 1}`, d.label)));
-  if (chosen && !inputs.some((d) => d.label === chosen)) picker.append(new Option(`${chosen} (not connected)`, chosen));
-  picker.value = chosen;
-}
-picker.onchange = () => glass.store({ inputDevice: picker.value });
-navigator.mediaDevices?.addEventListener?.('devicechange', () => fillPicker(true));
-
-function stopListening() {
-  ear.stream?.getTracks().forEach((t) => t.stop());
-  ear.ctx?.close?.();
-  Object.assign(ear, { ctx: null, an: null, stream: null, err: '' });
-}
-// One reading: how loud (mouth open) and how bright (wide "ee" vs round "oo").
-function hear(gain) {
-  if (!ear.an) return null;
-  ear.an.getFloatTimeDomainData(ear.td);
-  let sum = 0; for (const v of ear.td) sum += v * v;
-  const rms = Math.sqrt(sum / ear.td.length);
-  // An adaptive noise floor: falls quickly to quiet, creeps up slowly under steady noise.
-  ear.floor = rms < ear.floor ? lerp(ear.floor, rms, 0.1) : ear.floor * 1.0006;
-  const gate = ear.floor * 2.2 + 0.0015;
-  const amp = Math.min(1, Math.pow(Math.max(0, rms - gate) * 9 * gain, 0.7));
-  ear.an.getFloatFrequencyData(ear.fd);
-  const hz = ear.ctx.sampleRate / ear.an.fftSize;
-  const band = (lo, hi) => { let s = 0; for (let i = Math.floor(lo / hz); i < Math.ceil(hi / hz); i++) s += Math.pow(10, ear.fd[i] / 10); return s; };
-  // Vowel color from where the second formant sits: energy at 1.7-3.4 kHz vs 1-1.7 kHz.
-  // Measured on synthesized speech: "ee/eh" about +18 dB, "ah" about -3, "oh/oo" about -16.
-  // (The plain spectral centroid gets this backwards: "ee" has a LOW centroid.)
-  const d = 10 * Math.log10((band(1700, 3400) + 1e-12) / (band(1000, 1700) + 1e-12));
-  const ee = Math.max(0, Math.min(1, (d - 5) / 10)), oo = Math.max(0, Math.min(1, (-d - 8) / 10));
-  ear.wide = lerp(ear.wide ?? 0.65, 0.65 + 0.35 * ee - 0.65 * oo, 0.4);
-  ear.jaw = lerp(ear.jaw ?? 1, 1 - 0.45 * ee, 0.4);     // "ee" barely drops the jaw
-  if (amp > 0.04) ear.heardAt = performance.now();
-  return { amp: amp * ear.jaw, raw: amp, wide: ear.wide };
-}
+// ---------- Speech ----------
+// Phoneme-driven mouth shapes live in lipsync.js; this file reaches them through window.LIPSYNC
+// (wordAt / mouthAt) as the feed's words arrive.
+// Everything his mouth does now comes from the speech feed — the audio itself, every word's timing
+// and its phonemes. Two older ways of guessing at it are gone rather than left sitting unreachable:
+// a timeline estimated from the text's character count (with `say --text` and `hush`, which only
+// pushed to and emptied that queue), and reading loudness and vowel color off a raw audio input.
+// Both were approximations of what the feed measures exactly.
 
 // ---------- Speech feed: speech events + audio from a relay ----------
 // Any server that speaks the speech-feed protocol (README: "Speech feed") over a WebSocket at
@@ -191,7 +79,7 @@ function hear(gain) {
 // JSON, plus the audio as binary frames.  The vmux relay is one; it also serves the client
 // library this uses (<url>/sdk/vmux-client.js), so the two always match.  The audio is played
 // (or, muted, just clocked) here, so every word lands exactly when it's heard.
-const feed = { key: '', client: null, player: null, err: '', sessionId: null, loading: null, retryAt: 0 };
+const feed = { key: '', client: null, player: null, err: '', sessionId: null, loading: null, retryAt: 0, resumeAt: 0 };
 async function feedSessionId() {
   if (settings.feedSession) return settings.feedSession;
   const dir = props?.session?.cwd;
@@ -216,13 +104,13 @@ function stopFeed() {
   Object.assign(feed, { client: null, player: null, sessionId: null, muted: undefined });
 }
 // Called every frame like listen(): (re)connects when the settings change, else does nothing.
-const feedBase = () => (settings.feedUrl || 'http://localhost:3100').replace(/\/+$/, '');
+const feedBase = () => (settings.relayUrl || 'http://localhost:3100').replace(/\/+$/, '');
 async function useFeed(on) {
   const base = feedBase();
-  const token = stored.feedToken || '';
-  const play = !!settings.feedPlayAudio;
-  const delayS = (settings.feedDelay ?? 90) / 1000;
-  const key = on ? [base, token, settings.feedSession || props?.session?.cwd || '', play, delayS].join('|') : '';
+  // The settings pane wins, so a token can be pasted in without the CLI; the stored value stays
+  // supported for anyone who set it with `vmux token Calcifer` already.
+  const token = (settings.authToken || '').trim() || stored.feedToken || '';
+  const key = on ? [base, token, settings.feedSession || props?.session?.cwd || ''].join('|') : '';
   if (key === feed.key) return;
   if (key && performance.now() < feed.retryAt) return; // backing off after a failure
   feed.key = key;
@@ -239,9 +127,10 @@ async function useFeed(on) {
     if (feed.key !== key) return; // settings changed meanwhile
     const { RelayClient, SpeechPlayer } = window.VmuxClient;
     const client = new RelayClient({ url: base, token, lockSessionId: sessionId, subscribeAudio: true });
-    // Playing it himself: exact sync.  Muted (another app plays it, e.g. the vmux pane through
-    // LiveKit): his clock waits feedDelay so his mouth lands with what you hear.
-    const player = new SpeechPlayer(client, { muted: !play, leadInS: play ? 0.08 : Math.max(0.08, delayS) });
+    // He always plays Claude's voice himself, so his mouth and the audio share one clock and the
+    // sync is exact. Keep other players muted — he is an ordinary voice client, and two of them
+    // playing the same reply is just an echo.
+    const player = new SpeechPlayer(client, { muted: false, leadInS: 0.08 });
     client.on('close', ({ code }) => {
       if (code === 4001) feed.err = 'Speech feed rejected the token (revoked or expired?)';
       if (code === 4003) feed.err = 'Speech feed rejected this origin';
@@ -259,87 +148,128 @@ async function useFeed(on) {
 // ---------- His ears (ears.js): the user's mic, and talking to him by name ----------
 // The choices are stored values (mic: project, muted: global), set here, by voice, or by Claude
 // (`claude-glass app calcifer mic --mode ...`); written locally first so a frame never sees the old one.
-function setPosture(mic) {
+// Three postures: "off" (nothing listens), "wake" (his spotter listens here for his name, and the
+// mic is open to nothing but it), and "open" (a conversation, mic live in the room). See ears.js.
+function setPosture(mic, { called = true } = {}) {
   if ((stored.mic || 'off') === mic) return;
   stored = { ...stored, mic }; glass.store({ mic });
-  if (mic === 'open') perform({ mood: 'curious', for: 2, react: 'sparks', gaze: 'viewer' });
-  else if (mic === 'wake') perform({ action: 'sigh' });
-  else perform({ react: 'sputter' });
+  if (mic !== 'open') return void perform({ react: 'sputter' });
+  if (!called) { perform({ mood: 'curious', for: 1, gaze: 'viewer' }); return void onCue('listen'); }
+  perform({ mood: 'curious', for: 2, react: 'sparks', gaze: 'viewer' });
+  // When he was last asked to listen, for the acknowledge hook. His posture can't be that signal:
+  // the relay bumps its silence signal on any noise-only clip, a duplicate audio stream in the room
+  // produces one on every utterance, and that drops him straight back out of `open` before the
+  // prompt even reaches Claude. This timestamp survives it.
+  glass.store({ calledAt: Date.now() });
+  // Opening his mic pulls him out of whatever idle stage he had drifted into: onCue resets
+  // B.quietSince, and wakes him first if he had gone sleepy or asleep.
+  onCue('listen');
 }
 function setMuted(muted) {
   if (!!stored.muted === muted) return;
   stored = { ...stored, muted }; glass.store({ muted });
   react(muted ? 'sputter' : 'flare');
 }
+// Spoken commands still reach him, but only through transcripts the relay already made while his
+// mic was open ("Calcifer, stop listening") — never from a clip of his own.
+// A conversation ending drops him back to "wake" rather than "off": the spotter is the whole point
+// of ending gracefully, so his name still reaches him afterwards. Only a click turns him all the
+// way off.
 window.EARS.onCommand = (cmd) => {
   if (cmd === 'stop') setPosture('wake');
+  // The follow-up window: his mic opens by itself for a few seconds after he finishes speaking, so
+  // an answer needs no second calling. No `calledAt` stamp and no fanfare — he is still in the
+  // conversation they were already having, not being summoned into a new one, and stamping it
+  // would have him acknowledge his own follow-up window out loud.
+  if (cmd === 'follow') setPosture('open', { called: false });
   if (cmd === 'mute') setMuted(true);
   if (cmd === 'unmute') setMuted(false);
 };
-// He heard his name. Alone, it opens a conversation; with a command, he does it; with anything
-// else ("Calcifer, run the tests"), that goes to Claude now and the conversation stays open.
-window.EARS.onName = (rest) => {
-  const cmd = window.EARS.voiceCommand(rest);
-  if (cmd) return window.EARS.onCommand(cmd);
-  const asks = /[a-z]/i.test(rest.replace(/\b(please|hi|hey|hello|um|uh|yes|yeah|okay|ok)\b/gi, ''));
-  if (asks) feed.client?.sendText(rest);
-  playAck(asks ? 'working' : 'wake');
+// What Claude is doing, remembered between frames so a click can tell "he's busy" from "he's idle".
+let lastAgent = 'idle';
+// Whether his voice was playing on the previous frame. One frame late is fine for suppressing idle
+// fidgets, and it saves asking the player for a frame twice in the same tick.
+let lastTalking = false;
+// Cut him off and take the turn. The player is stopped here as well as at the relay, because the
+// audio already buffered in this window would otherwise keep playing over the interruption.
+function bargeIn() {
+  try { feed.player?.stopAll(); } catch {}
+  window.EARS.barge(feed.sessionId);
+  setPosture('open', { called: false });
+  perform({ mood: 'curious', for: 2, react: 'sputter', gaze: 'viewer' });
+}
+// ---------- His spotter (wake/spotter.js): hearing his name without transcribing anything ----------
+// Outside his own turn, a wake landing while his voice is in the air is treated as his own echo:
+// `spot.hush` is pushed forward on every frame his voice is playing — the whole time, not only
+// while his mouth is shaping a phoneme, since the gaps between words are still audio coming out of
+// the speakers.
+//
+// That guard used to apply during his turn too, which made a spoken interrupt impossible. Its
+// stated justification was that he says his own name constantly — he does not, speaking *as* him
+// he almost never says it. So during his turn the guard steps aside and his name means "stop"
+// (see onWake).
+const spot = { want: false, hush: 0, lastAt: 0, statusAt: 0, woke: 0, echoed: 0, last: null, agent: 'idle' };
+const SPOT_TAIL_MS = 1500;     // how long after his last word a wake is still considered his echo
+window.SPOTTER.onWake = (score) => {
+  const now = performance.now();
+  // Saying his name mid-reply means "stop", the same thing clicking him means. What protects this
+  // from his own voice is echo cancellation on the capture, which is on — and a false one here
+  // costs an interrupted sentence, not a wrong action.
+  const interrupting = spot.agent !== 'idle' && settings.voiceInterrupt !== false;
+  // Outside his turn, `hush` only covers audio already playing, and his very first false wake
+  // scored 0.973 in the same second his reply began — too close to call. The relay reports
+  // "speaking" before the first sample reaches the speakers, which closes that gap at the front.
+  const echo = !interrupting && (now < spot.hush + SPOT_TAIL_MS || spot.agent === 'speaking');
+  // Kept either way, because "he keeps waking himself" and "he never wakes" need telling apart
+  // from outside this window (`claude-glass stored calcifer`, wakeStatus.last).
+  spot.last = { at: new Date().toISOString(), score: +score.toFixed(3), echo,
+                agent: spot.agent, cutOff: interrupting };
+  if (echo) return void spot.echoed++;
+  if (now - spot.lastAt < 2000) return;            // one wake per utterance
+  spot.lastAt = now;
+  spot.woke++;
+  if (interrupting) return void bargeIn();
   setPosture('open');
 };
-// What you said right after his name, before the conversation's mic was open
-window.EARS.onFollow = (text) => {
-  const cmd = window.EARS.voiceCommand(text);
-  if (cmd) return window.EARS.onCommand(cmd);
-  feed.client?.sendText(text);
-  playAck('working');
-};
-
-// ---------- Quick replies: "mm-hm?" when called, "on it" when he takes a request ----------
-// Said in Claude's own voice without going through Claude: a few short clips made once by the
-// local Kokoro (the TTS vmux uses) and kept, so one plays the instant he hears his name while you
-// keep talking. His ear strips these phrases from what it hears (ears.js), so they never echo
-// back as a request.
-const ACK_LINES = { wake: ['Mm-hm?', 'Yeah?', "What's up?", 'Hm?', "I'm listening."], working: ['On it.', 'Got it.', 'One sec.', 'Okay.'] };
-const ack = { voice: null, ctx: null, clips: {}, an: null, buf: null, until: 0, line: '' };
-async function loadAcks(voice) {
-  if (ack.voice === voice) return;
-  ack.voice = voice; ack.clips = {};
-  ack.ctx ??= new AudioContext();
-  ack.an ??= Object.assign(ack.ctx.createAnalyser(), { fftSize: 1024 });
-  if (!ack.gain) { ack.gain = ack.ctx.createGain(); ack.an.connect(ack.gain); ack.gain.connect(ack.ctx.destination); ack.buf = new Float32Array(ack.an.fftSize); }
-  const url = (settings.ackUrl || 'http://localhost:8101/v1').replace(/\/+$/, '') + '/audio/speech';
-  for (const [kind, lines] of Object.entries(ACK_LINES)) for (const text of lines) {
-    try {
-      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'tts-1', input: text, voice, response_format: 'wav', speed: 1.0 }) });
-      if (!res.ok || ack.voice !== voice) continue;
-      const audio = await ack.ctx.decodeAudioData(await res.arrayBuffer());
-      (ack.clips[kind] ??= []).push({ text, audio });
-    } catch { /* Kokoro not running: he just doesn't answer out loud */ }
-  }
-}
-function playAck(kind) {
-  if (settings.acks === false) return;
-  const list = ack.clips[kind];
-  if (!list?.length) return;
-  const { text, audio } = list[(Math.random() * list.length) | 0];
-  ack.ctx.resume?.();
-  ack.gain.gain.value = stored.muted ? 0 : 1;            // muted: he still mouths it
-  const src = ack.ctx.createBufferSource(); src.buffer = audio; src.connect(ack.an); src.start();
-  ack.until = performance.now() + audio.duration * 1000 + 80; ack.line = text;
-}
-// While a quick reply plays: how loud it is now (0..1), else null
-function ackLevel() {
-  if (performance.now() > ack.until) return null;
-  ack.an.getFloatTimeDomainData(ack.buf);
-  let s = 0; for (const v of ack.buf) s += v * v;
-  return Math.min(1, Math.sqrt(s / ack.buf.length) * 7);
-}
-window.EARS.onLog = (earLog) => glass.store({ earLog });
+// He doesn't answer out loud when his mic opens. A spoken "mm-hm?" was one more thing for the mic
+// to pick up, and the only acknowledgement that matters is Claude taking the work — which the
+// acknowledge hook speaks through the relay instead.
 window.EARS.onStatus = (earStatus) => glass.store({ earStatus });
 
 // Browsers may hold audio until a gesture; any click on him resumes it.
 addEventListener('pointerdown', () => feed.player?.resume().catch(() => {}));
+addEventListener('keydown', () => feed.player?.resume().catch(() => {}));
+
+// ---------- Not falling asleep in the middle of a sentence ----------
+// Borrowed from vmux's own useKeepAwake: hold a screen wake lock while a conversation is actually
+// open. The display sleeping mid-conversation is what suspends every audio context in here, and
+// no amount of resuming afterwards recovers the words that were said in the meantime.
+//
+// Only while the mic is open, never while merely waiting to be called — listening for a name all
+// afternoon is no reason to stop the machine ever sleeping. vmux also plays silent audio to keep
+// mobile tabs alive and deliberately skips that on desktop, because there it would block system
+// sleep outright; so that part is left out.
+const awake = { sentinel: null, want: false, tried: 0 };
+async function keepAwake(want, now) {
+  awake.want = want;
+  try {
+    if (want && !awake.sentinel && now - awake.tried > 5000) {
+      awake.tried = now;
+      const wl = navigator.wakeLock;
+      if (!wl) return;
+      const s = await wl.request('screen');
+      // The browser releases it on its own when the document is hidden; notice, so it can be taken
+      // again when he comes back.
+      s.addEventListener?.('release', () => { if (awake.sentinel === s) awake.sentinel = null; });
+      if (!awake.want) { await s.release(); return; }
+      awake.sentinel = s;
+    } else if (!want && awake.sentinel) {
+      const s = awake.sentinel;
+      awake.sentinel = null;
+      await s.release();
+    }
+  } catch { awake.sentinel = null; }   // unsupported, or refused: not worth a word
+}
 // Mouth from the feed at this moment, or null when he isn't speaking.
 // Subtitles a line or two at a time: the spoken words grouped into chunks that end at a sentence
 // (or clause) once they're long enough, and never run past SUB_MAX characters. Each chunk shows
@@ -381,43 +311,8 @@ function feedMouth() {
 //   - a fresh onset (quiet -> loud) snaps it to the nearest syllable start
 //   - a real pause in the audio jumps it to the next punctuation pause in the text, and the
 //     next onset after that starts the following phrase's first syllable
-// Text that arrives after the audio started picks up where the audio already is.
-const sync = { item: null, t: 0, quietFor: 0, lastAmp: 0, atPause: null, speechStart: 0, lastHeard: 0 };
-function syncText(heard, talking, dt) {
-  const now = performance.now();
-  if (talking && now - sync.lastHeard > 1500) sync.speechStart = now;   // speech began after a long quiet
-  if (talking) sync.lastHeard = now;
-  if (!sync.item && queue.length && talking) {
-    sync.item = queue.shift();
-    sync.t = Math.max(0, (now - sync.speechStart) / 1000 - 0.05);
-    sync.atPause = null;
-  }
-  const it = sync.item;
-  if (!it) return { item: null, t: 0 };
-  const onset = heard.raw > 0.28 && sync.lastAmp < 0.12;
-  sync.lastAmp = heard.raw;
-  if (talking) {
-    sync.quietFor = 0;
-    if (onset && sync.atPause !== null) {
-      const next = it.plan.syl.find((s) => s.t0 > sync.atPause);       // resume at the next phrase
-      if (next) sync.t = next.t0;
-      sync.atPause = null;
-    } else if (onset) {
-      let best = null;
-      for (const s of it.plan.syl) if (Math.abs(s.t0 - sync.t) < 0.16 && (!best || Math.abs(s.t0 - sync.t) < Math.abs(best.t0 - sync.t))) best = s;
-      if (best) sync.t = best.t0;
-    }
-    sync.t += dt;
-  } else {
-    sync.quietFor += dt;
-    if (sync.quietFor > 0.2 && sync.atPause === null) {                 // a real pause, not a gap
-      const p = it.plan.pauses.find((x) => x >= sync.t - 0.2);
-      if (p !== undefined && p - sync.t < 1.2) { sync.t = p; sync.atPause = p; }
-    }
-  }
-  if (sync.t > it.plan.dur + 0.3 || sync.quietFor > 2.5) sync.item = null; // finished (or abandoned)
-  return { item: it, t: sync.t };
-}
+// (The "both" mode that re-aligned an estimated text timeline against live audio loudness went with
+// the audio-input path: the feed carries real timings, so there is nothing left to re-align.)
 
 // ---------- Fire shader ----------
 const fireCv = document.createElement('canvas'); // offscreen: composited into the one visible canvas
@@ -428,6 +323,7 @@ const FS = `#version 300 es
 precision highp float;
 uniform vec2 uRes; uniform float uTime; uniform vec2 uCenter; uniform float uR;
 uniform float uSway; uniform float uLean; uniform float uGlow; uniform float uAlpha; uniform float uFlame;
+uniform float uStep;   // poses a second; 0 means don't step at all (fully smooth)
 uniform vec3 uC0, uC1, uC2, uCore;
 out vec4 o;
 float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -437,7 +333,7 @@ float fbm(vec2 p){ float a = .5, s = 0.; for (int i = 0; i < 3; i++) { s += a * 
 void main(){
   vec2 fc = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);
   vec2 p = (fc - uCenter) / uR; p.y = -p.y;            // body units, y up, 0 = body center
-  float t = floor(uTime * 12.) / 12.;                   // the shape moves "on twos", like the film
+  float t = uStep > 0. ? floor(uTime * uStep) / uStep : uTime;   // "on twos" like the film, or smooth
   float up = smoothstep(-0.4, 1.5, p.y);                // 0 in the round body, 1 up in the licks
   p.x -= uLean * up * 0.8;
   // uFlame is a clock that runs at the current sway speed (accumulated in JS), so changing the
@@ -485,7 +381,7 @@ function initGL() {
   const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
   const loc = gl.getAttribLocation(prog, 'a'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-  for (const u of ['uRes', 'uTime', 'uCenter', 'uR', 'uSway', 'uLean', 'uGlow', 'uAlpha', 'uFlame', 'uC0', 'uC1', 'uC2', 'uCore']) uni[u] = gl.getUniformLocation(prog, u);
+  for (const u of ['uRes', 'uTime', 'uCenter', 'uR', 'uSway', 'uLean', 'uGlow', 'uAlpha', 'uFlame', 'uStep', 'uC0', 'uC1', 'uC2', 'uCore']) uni[u] = gl.getUniformLocation(prog, u);
 }
 initGL();
 // Sleep, a GPU switch or a long minimize can take the GPU context away; rebuild when it's back.
@@ -545,18 +441,24 @@ const FACE_ALPHA = 0.56; // the face lets his fire glow through a little
 const bg = bgCv.getContext('2d'), fg = fgCv.getContext('2d'), sub = document.getElementById('sub'), status = document.getElementById('status');
 let props = null, settings = {}, stored = {}, seen = null, moodSeqSeen = null;
 let mood = 'neutral', moodUntil = 0;
-const queue = []; // { start, plan, chunks }
-const rig = { ...BASE, pal: PAL.normal.map((c) => c.slice()), mouthOpen: 0, mouthWide: 0.75, impulse: 0, shake: 0, squint: 0 };
+const rig = { ...BASE, pal: PAL.normal.map((c) => c.slice()), mouthOpen: 0, mouthWide: 0.75, impulse: 0, kick: 0, shake: 0, squint: 0 };
 let blinkAt = performance.now() + 2500, blinkT = -1;
 let lookX = 0, lookY = 0, lookUntil = 0;
 const embers = [];
 
 function onProps(p) {
   props = p; settings = p.settings || {}; stored = p.stored || {};
-  fillPicker();
   sub.style.setProperty('--sub-scale', String((settings.subtitleSize ?? 100) / 100));
   sub.style.setProperty('--sub-color', settings.subtitleColor || '#fff3cf');
   const st = p.state || {};
+  // A new command to breathe out. core.js puts it in state on tool.start, so it needs nothing
+  // hooked or configured outside this app. Adopted silently on the first props, so reopening him
+  // doesn't replay whatever he was doing an hour ago.
+  const d = st.doing;
+  if (d && d.seq !== doingSeen) {
+    doingSeen = d.seq;
+    if (seen !== null) spawnWisp(d.text || d.tool);
+  }
   if (seen === null) { // first props: adopt the restored state without replaying old speech or cues
     seen = st.seq || 0; moodSeqSeen = st.moodSeq || 0; mood = st.mood || 'neutral'; B.cueSeen = st.cue?.seq ?? null;
     return;
@@ -569,23 +471,102 @@ function onProps(p) {
   if (st.cue && st.cue.seq !== B.cueSeen) { B.cueSeen = st.cue.seq; onCue(st.cue.name); }
   if ((st.seq || 0) === seen) return;
   seen = st.seq;
-  const sp = st.speech;
-  if (sp && sp.seq === seen) {
-    if (!sp.text) queue.length = 0;
-    else if (!sp.auto || settings.autoSpeak !== false) {
-      const now = performance.now(), last = queue[queue.length - 1];
-      const start = Math.max(now + (sp.auto ? (settings.speechDelay ?? 700) : 0), last ? last.start + last.plan.dur * 1000 : 0);
-      const pl = plan(sp.text, settings.speechRate || 15);
-      queue.push({ start, plan: pl, chunks: chunks(sp.text, pl.dur) });
-    }
-  }
+  // st.speech is ignored: his mouth follows the feed's real audio, so text with no audio behind it
+  // has nothing to drive it. (That retires `say --text` and `hush`.)
   const r = st.reaction;
   if (r && r.seq === seen) react(r.kind);
 }
 
+// ---------- What he's working on, as wisps of his own flame ----------
+// A hook pushes each command into the stored value `doing`; this lifts it off him and lets it thin
+// out the way the fire does. The point is telling "working" from "sitting there" at a glance, so it
+// has to read as part of the scene rather than as a caption laid over it.
+const wisps = [];
+const WISP_MS = 4200;      // how long one wisp takes to climb and vanish
+const WISP_LINE = 22;      // characters per wisp; longer reads as a banner, not as smoke
+let doingSeen = null;
+
+function spawnWisp(text) {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return;
+  // Broken into a few short pieces at word boundaries, so several wisps lift off in sequence
+  // instead of one long line sliding up.
+  const pieces = [];
+  let line = '';
+  for (const w of clean.split(' ')) {
+    if (line && (line + ' ' + w).length > WISP_LINE) { pieces.push(line); line = w; }
+    else line = line ? `${line} ${w}` : w;
+    if (pieces.length >= 3) break;
+  }
+  if (line && pieces.length < 3) pieces.push(line);
+  const now = performance.now();
+  pieces.forEach((p, i) => wisps.push({
+    text: p.length > WISP_LINE + 6 ? `${p.slice(0, WISP_LINE + 4)}…` : p,
+    born: now + i * 300, seed: Math.random() * 10, side: (Math.random() - 0.5) * 0.6,
+  }));
+  if (wisps.length > 6) wisps.splice(0, wisps.length - 6);   // a handful at once; more is noise and cost
+}
+
+function drawWisps(cx, cy, R, t, now) {
+  if (settings.commandWisps === false || !wisps.length) return;
+  const size = Math.max(8, R * 0.17 * ((settings.commandWispSize ?? 100) / 100));
+  const font = `600 ${size}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+  fg.save();
+  fg.globalCompositeOperation = 'lighter';   // light coming off him, not ink printed over him
+  fg.font = font;
+  fg.textAlign = 'center';
+  fg.textBaseline = 'middle';
+  for (let i = wisps.length - 1; i >= 0; i--) {
+    const w = wisps[i];
+    const age = (now - w.born) / WISP_MS;
+    if (age >= 1) { wisps.splice(i, 1); continue; }
+    if (age < 0) continue;
+    // Catches fast and thins out slowly, the way his flame falls off rather than a linear fade.
+    const a = Math.min(1, age * 7) * Math.pow(1 - age, 1.7) * 0.9;
+    const y = cy - R * (0.95 + age * 2.7);
+    const bx = cx + w.side * R * 0.45 + Math.sin(t * 0.9 + w.seed) * R * 0.12 * age;
+    // Character widths are measured once per wisp and cached against the font size. measureText is
+    // not cheap, and the old version called it twice per character per frame — for a dozen wisps
+    // of twenty-odd characters at sixty frames a second, that was tens of thousands of text
+    // measurements a second on top of the whole scene.
+    if (w.size !== size) {
+      w.size = size;
+      w.font = font;
+      w.chars = [...w.text];
+      w.widths = w.chars.map((ch) => fg.measureText(ch).width);
+      w.total = w.widths.reduce((sum, v) => sum + v, 0);
+    }
+    let x = bx - w.total / 2;
+    for (let k = 0; k < w.chars.length; k++) {
+      // Per character, so the line wavers like heat instead of sliding as a block — and the waver
+      // grows as it climbs, so it is legible near him and comes apart higher up.
+      const wob = Math.sin(t * 2.6 + k * 0.55 + w.seed) * size * 0.18 * (0.3 + age * 1.2);
+      const lift = Math.cos(t * 2.1 + k * 0.42 + w.seed) * size * 0.12 * age;
+      const cx2 = x + w.widths[k] / 2 + wob, cy2 = y + lift;
+      // The glow used to be a shadowBlur on every glyph, which is the most expensive thing a 2D
+      // canvas can be asked to do and was almost certainly the stutter. Two plain fills — a soft
+      // oversized one under a sharp one, both in 'lighter' — read the same against the dark hearth
+      // and cost a fraction of it.
+      fg.globalAlpha = a * 0.35;
+      fg.fillStyle = css(rig.pal[1], 1);
+      fg.font = `600 ${size * 1.3}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+      fg.fillText(w.chars[k], cx2, cy2);
+      fg.globalAlpha = a;
+      fg.fillStyle = css(rig.pal[k % 3 === 0 ? 1 : 2], 1);
+      fg.font = w.font;
+      fg.fillText(w.chars[k], cx2, cy2);
+      x += w.widths[k];
+    }
+  }
+  fg.restore();
+}
+
 function react(kind) {
-  if (kind === 'flare') { rig.impulse += 0.65; burst(22); }
-  if (kind === 'sputter') rig.impulse -= 0.5;
+  // Into `kick`, not straight onto `impulse`. Written onto impulse, a flare added 0.65 to his drawn
+  // size in a single frame — a 65% jump with no rise at all, which is the "weird puff": it looked
+  // like a glitch rather than a flare because nothing that size happens instantly.
+  if (kind === 'flare') { rig.kick += 0.65; burst(22); }
+  if (kind === 'sputter') rig.kick -= 0.5;
   if (kind === 'sparks') burst(46);
   if (kind === 'wince') { rig.squint = 1; rig.shake = 1; }
   window.SOUNDS?.play(kind);
@@ -608,13 +589,19 @@ function pick(options) {
   for (let i = 0; i < options.length; i++) { r -= w[i]; if (r <= 0) return options[i]; }
   return options[options.length - 1];
 }
+// How long a reaction to something lingers, against what the persona asks for. The persona's own
+// numbers are a few seconds each, which read as a twitch rather than a reaction — he was back to
+// his resting face before you had noticed he had one. Scaled in one place because these durations
+// are spread across every cue in persona/*.js, and the ratios between them are already right.
+const CUE_STRETCH = 1.6;
 function perform(o) {
   if (!o) return;
   const now = performance.now();
-  if (o.mood) B.overlay = { mood: o.mood, until: now + (o.for ?? 3) * 1000, strong: !!o.strong };
+  const hold = (secs, dflt) => now + (secs ?? dflt) * 1000 * CUE_STRETCH;
+  if (o.mood) B.overlay = { mood: o.mood, until: hold(o.for, 3), strong: !!o.strong };
   if (o.react) react(o.react);
   if (o.action && ACTIONS[o.action]) { B.action = { name: o.action, start: now, dur: ACTIONS[o.action].dur }; window.SOUNDS?.play(o.action); }
-  if (o.gaze) B.gaze = { mode: o.gaze, until: now + (o.for ?? 2.5) * 1000, side: Math.random() < 0.5 ? -1 : 1 };
+  if (o.gaze) B.gaze = { mode: o.gaze, until: hold(o.for, 2.5), side: Math.random() < 0.5 ? -1 : 1 };
 }
 function restingMood(now) {
   const quiet = (now - B.quietSince) / 1000;
@@ -631,7 +618,7 @@ function onCue(name) {
 }
 // Little actions: each shapes the pose over its duration (p: 0..1) and may drive the mouth.
 const ACTIONS = {
-  yawn:    { dur: 2.0, run(p, pose) { const e = Math.pow(Math.max(0, Math.sin(Math.PI * p)), 1.5); pose.lid = Math.max(pose.lid, 0.6 * e); pose.smileEyes = 0; pose.size += 0.06 * e; return { open: 0.85 * e, wide: 0.15 }; } },
+  yawn:    { dur: 2.0, run(p, pose) { const e = Math.pow(pos(Math.sin(Math.PI * p)), 1.5); pose.lid = Math.max(pose.lid, 0.6 * e); pose.smileEyes = 0; pose.size += 0.06 * e; return { open: 0.85 * e, wide: 0.15 }; } },
   sigh:    { dur: 1.6, run(p, pose) { const e = Math.sin(Math.PI * p); pose.size -= 0.16 * e; pose.py += 0.3 * e; pose.sway *= 1 - 0.4 * e; return { open: 0.16 * e, wide: 0.3 }; } },
   hop:     { dur: 0.7, run(p) { return { dy: -Math.sin(Math.PI * p) * 0.18 }; } },
   shiver:  { dur: 1.1, run(p, pose) { pose.tremble = Math.max(pose.tremble, 1.2 * (1 - p)); } },
@@ -642,8 +629,8 @@ const ACTIONS = {
     pose.px = 0; pose.py = 0.75; if (p > 0.82) pose.curve = 0.8;
     const down = Math.max(0, Math.min(1, p / 0.14, (0.9 - p) / 0.12));
     const ease = down * down * (3 - 2 * down);
-    return { open: p > 0.12 && p < 0.8 ? Math.max(0, Math.sin((p - 0.12) * Math.PI * 9)) * 0.5 : 0, wide: 0.6,
-      dy: ease * Math.max(0, 0.38 * rig.size - 0.16) };
+    return { open: p > 0.12 && p < 0.8 ? pos(Math.sin((p - 0.12) * Math.PI * 9)) * 0.5 : 0, wide: 0.6,
+      dy: ease * pos(0.38 * fin(rig.size, 1) - 0.16) };
   } },
   stretch: { dur: 1.8, run(p, pose) { const e = Math.sin(Math.PI * p); pose.size += 0.25 * e; pose.lid = Math.max(pose.lid, 0.3 * e); return { open: 0.1 * e, wide: 0.3 }; } },
   snore:   { dur: 3.2, run(p, pose) { const e = 0.5 - 0.5 * Math.cos(p * Math.PI * 2); pose.size += 0.05 * e; return { open: 0.1 * e, wide: 0.2 }; } },
@@ -661,7 +648,40 @@ function applyGaze(pose, t, now) {
 }
 
 // ---------- Helpers ----------
-const lerp = (a, b, k) => a + (b - a) * k;
+// ---------- Numbers that cannot go bad ----------
+// The old defence was healRig(): spot a non-finite value in the rig after the fact and put it back.
+// That treated the symptom, and it also hid how the values got there. The cause is that the obvious
+// clamp is not one — `Math.max(0, NaN)` is NaN, not 0, so a single bad number walks straight through
+// every guard written that way and spreads to everything it touches.
+//
+// So: nothing non-finite is allowed to enter the rig in the first place, and every pose value is
+// held inside a range it is physically meant to occupy. That is also what stops him puffing up to a
+// ridiculous size and snapping back — even if some new animation gets its arithmetic wrong, the
+// worst it can do now is sit at the edge of its range.
+const fin = (v, dflt = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : dflt);
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+const pos = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);   // NaN-safe max(0,v)
+// Generous next to what the personas actually ask for (size 0.66..1.34, py -0.65..0.4), with room
+// for an action to push past a mood, but never room for nonsense.
+const POSE_LIMITS = {
+  size: [0.35, 2.0], lean: [-0.6, 0.6], sway: [0, 3], eye: [0.4, 2.2], tall: [0.4, 2.2],
+  lid: [0, 1], tilt: [-1.2, 1.2], smileEyes: [0, 1], pupil: [0.15, 2.2], px: [-1.6, 1.6],
+  py: [-2.2, 2.2], open: [0, 1.2], wide: [0, 1.5], curve: [-1.2, 1.2], teeth: [0, 1],
+  embers: [0, 2], tremble: [0, 2], hug: [0, 1.6],
+};
+function sanitizePose(pose) {
+  for (const key of EASED) {
+    const [lo, hi] = POSE_LIMITS[key] ?? [-1e3, 1e3];
+    pose[key] = clamp(fin(pose[key], fin(BASE[key], 0)), lo, hi);
+  }
+  return pose;
+}
+// A non-finite target would poison the rig value it is easing towards, so it simply does not move.
+const lerp = (a, b, k) => {
+  if (!Number.isFinite(b)) return Number.isFinite(a) ? a : 0;
+  if (!Number.isFinite(a)) return b;
+  return a + (b - a) * fin(k, 0);
+};
 const mix3 = (a, b, k) => a.map((v, i) => lerp(v, b[i], k));
 const css = (c, a = 1) => `rgba(${(Math.min(1, c[0]) * 255) | 0},${(Math.min(1, c[1]) * 255) | 0},${(Math.min(1, c[2]) * 255) | 0},${a})`;
 const noise = (t, s) => Math.sin(t * 1.7 + s) * 0.5 + Math.sin(t * 2.9 + s * 1.3) * 0.3 + Math.sin(t * 5.3 + s * 2.1) * 0.2;
@@ -883,16 +903,21 @@ const COALS = Array.from({ length: 26 }, (_, i) => {               // fixed spot
   const a = i * 2.39996, d = Math.sqrt((i + 0.5) / 26) * 0.92;
   return { x: Math.cos(a) * d, y: Math.sin(a) * d * 0.8 - 0.1, size: 0.6 + ((i * 37) % 10) / 14, phase: i * 1.7, wake: i % 4 === 0 };
 });
-const EAR_GLOW = { off: 0, resting: 0.08, wake: 0.14, hearing: 0.55, joining: 0.3, waiting: 0.3, listening: 0.75 };
+// "waking" sits low on purpose: he is listening for one word, not to you, and the ear should not
+// claim more attention than that.
+const EAR_GLOW = { off: 0, joining: 0.3, waking: 0.16, waiting: 0.3, listening: 0.40 };
+// Two lines: what he's doing, then what you can do about it. It used to be one run-on string with
+// the device name stuck on the end, which read as "Listening · "Calcifer, stop listening" or click
+// to end · MacBook Pro Microphone (Built-in)" — complete, and unreadable.
 const EAR_TIP = {
-  off: 'Mic off · click to talk · right-click: listen for his name',
-  resting: 'Listening for his name after this turn',
-  wake: 'Say "Calcifer" · click to talk now · right-click: mic off',
-  hearing: 'Heard something…',
-  joining: 'Opening the mic…',
-  waiting: 'Conversation on · mic opens on your turn · click to end',
-  listening: 'Listening · "Calcifer, stop listening" or click to end',
+  off:       { state: 'Mic off',              hint: 'Click to listen for your name' },
+  joining:   { state: 'Opening the mic…',     hint: '' },
+  waking:    { state: 'Waiting to be called', hint: 'Right-click to talk now' },
+  waiting:   { state: 'In conversation',      hint: 'Mic opens on your turn · click to end' },
+  listening: { state: 'Listening',            hint: 'Click to end, or say “Calcifer, stop listening”' },
 };
+// "MacBook Pro Microphone (Built-in)" is more than anyone needs while hovering over a coal.
+const shortMic = (s) => String(s || '').split(' (')[0].replace(/\s+microphone$/i, '').trim();
 const hit = { ear: null, fire: null, hover: null };
 const earSparks = [];
 let earGlow = 0;
@@ -900,11 +925,17 @@ function drawAshes(S, ears, t, dt) {
   const c = fg, ph = ears.phase;
   const x = S.dx + ASH.cx * S.iw, y = S.dy + ASH.cy * S.ih, rx = ASH.rx * S.iw, ry = ASH.ry * S.ih;
   let target = EAR_GLOW[ph] ?? 0;
-  if (ph === 'wake' || ph === 'resting') target *= 0.6 + 0.4 * Math.sin(t * 1.6);
   if (ph === 'hearing') target += 0.2 * Math.abs(Math.sin(t * 11));
   if (ph === 'joining') target += 0.12 * Math.sin(t * 5);
-  if (ph === 'listening') target += 0.5 * ears.level;
-  earGlow = lerp(earGlow, target, 1 - Math.pow(ph === 'listening' ? 1e-5 : 0.03, dt));
+  // The coals breathe with the voice going into them rather than sitting at one brightness. The
+  // swing REPLACES the base for this phase instead of adding to it — added on top, even silence
+  // sat at 0.87 and every syllable clipped, which is why they looked like a lamp. The ladder is
+  // meant to be readable at a glance: dark when off, 0.16 waiting to be called, 0.30 in a
+  // conversation between turns, 0.40 listening to silence, and up near 1.0 when you are talking.
+  if (ph === 'listening') target = 0.40 + 0.62 * Math.pow(ears.level, 0.7);
+  // Loud syllables brighten almost instantly; the fall is slower, the way a coal actually cools.
+  const chase = ph === 'listening' ? (target > earGlow ? 2e-7 : 0.02) : 0.03;
+  earGlow = lerp(earGlow, target, 1 - Math.pow(chase, dt));
   const g = Math.max(0, Math.min(1.2, earGlow));
   hit.ear = { x, y, rx: rx * 1.15, ry: ry * 2.6 };
   if (g < 0.005 && !earSparks.length && hit.hover !== 'ear') return;
@@ -935,8 +966,9 @@ function drawAshes(S, ears, t, dt) {
     dot.addColorStop(0, css(mix3(rig.pal[2], CORE_LIGHT, 0.5), a)); dot.addColorStop(0.3, css(rig.pal[1], a * 0.7)); dot.addColorStop(1, 'rgba(0,0,0,0)');
     c.fillStyle = dot; c.fillRect(px - pr * 3, py - pr * 3, pr * 6, pr * 6);
   }
-  // Sparks up out of the ash while you talk
-  if (ph === 'listening' && Math.random() < (0.1 + ears.level) * dt * 25) {
+  // Sparks up out of the ash: a constant few while he is listening at all, so being activated is
+  // obvious even at the dim end, and many more as you get louder.
+  if (ph === 'listening' && Math.random() < (0.42 + ears.level * 1.8) * dt * 25) {
     const k = COALS[(Math.random() * COALS.length) | 0];
     earSparks.push({ x: x + k.x * rx, y: y + k.y * ry, vx: (Math.random() - 0.5) * unit * 14, vy: -unit * (25 + Math.random() * 40), life: 1 });
   }
@@ -944,17 +976,35 @@ function drawAshes(S, ears, t, dt) {
     const s = earSparks[i];
     s.x += s.vx * dt + Math.sin(t * 6 + i) * unit * 0.2; s.y += s.vy * dt; s.vy += unit * 12 * dt; s.life -= dt * 1.3;
     if (s.life <= 0 || earSparks.length > 80) { earSparks.splice(i, 1); continue; }
-    c.fillStyle = css(rig.pal[2], s.life); c.beginPath(); c.arc(s.x, s.y, unit * 0.7, 0, Math.PI * 2); c.fill();
+    c.fillStyle = css(rig.pal[2], s.life); c.beginPath(); c.arc(s.x, s.y, unit * 0.44, 0, Math.PI * 2); c.fill();
   }
   c.globalCompositeOperation = 'source-over';
   const r = ry * 1.5;
   // What it means, while hovered
   if (hit.hover === 'ear') {
-    c.font = `500 ${Math.max(11, Math.min(14, r * 1.1))}px ${getComputedStyle(document.body).getPropertyValue('--font-sans') || 'system-ui'}`;
+    const sans = getComputedStyle(document.body).getPropertyValue('--font-sans') || 'system-ui';
+    const tip = EAR_TIP[ph] || { state: '', hint: '' };
+    // The device belongs with the hint, not tacked onto the state, and only when it is listening
+    // for something — knowing which microphone is idle is no use to anyone.
+    const mic = ph !== 'off' && ph !== 'joining' ? shortMic(ears.mic) : '';
+    // While he's busy the click does something else entirely, so the tooltip has to say so.
+    const busy = lastAgent !== 'idle';
+    const state = busy ? 'Working' : tip.state;
+    const hint = busy ? 'Click to cut me off and take your turn'
+      : [tip.hint, mic].filter(Boolean).join(' · ');
+    const size = Math.max(11, Math.min(14, r * 1.1));
     c.textAlign = 'center'; c.textBaseline = 'bottom';
-    const tip = (EAR_TIP[ph] || '') + (ph !== 'off' && ears.mic ? ` · ${ears.mic}` : ''), tx = Math.min(innerWidth - 8 - c.measureText(tip).width / 2, Math.max(8 + c.measureText(tip).width / 2, x));
-    c.shadowColor = '#000'; c.shadowBlur = 6; c.fillStyle = '#ffe9c4';
-    c.fillText(tip, tx, y - r * 2.4);
+    c.shadowColor = '#000'; c.shadowBlur = 6;
+    // Measured on the wider of the two lines, so neither runs off the edge of the screen.
+    c.font = `600 ${size}px ${sans}`;
+    let wide = c.measureText(state).width;
+    c.font = `500 ${size * 0.88}px ${sans}`;
+    wide = Math.max(wide, c.measureText(hint).width);
+    const tx = Math.min(innerWidth - 8 - wide / 2, Math.max(8 + wide / 2, x));
+    if (hint) c.fillStyle = 'rgba(255, 233, 196, 0.62)', c.fillText(hint, tx, y - r * 2.4);
+    c.font = `600 ${size}px ${sans}`;
+    c.fillStyle = '#ffe9c4';
+    c.fillText(state, tx, y - r * 2.4 - (hint ? size * 1.25 : 0));
   } else if (hit.hover === 'fire') {
     c.font = `500 13px ${getComputedStyle(document.body).getPropertyValue('--font-sans') || 'system-ui'}`;
     c.textAlign = 'center'; c.textBaseline = 'top'; c.shadowColor = '#000'; c.shadowBlur = 6; c.fillStyle = '#ffe9c4';
@@ -970,13 +1020,21 @@ addEventListener('pointermove', (e) => { hit.hover = hitAt(e); document.body.sty
 addEventListener('pointerleave', () => { hit.hover = null; document.body.style.cursor = ''; });
 addEventListener('click', (e) => {
   const what = hitAt(e), mic = stored.mic || 'off';
-  if (what === 'ear') setPosture(e.altKey ? (mic === 'off' ? 'wake' : 'off') : mic === 'open' ? 'wake' : 'open');
+  // While he is mid-reply or mid-task, clicking him means "stop, I want to say something" rather
+  // than anything about postures. That is the one gesture that always has to work: waiting for him
+  // to finish is exactly what you cannot do when he has misunderstood you.
+  if (what === 'ear' && lastAgent !== 'idle') return void bargeIn();
+  // Otherwise the left button never starts a conversation. It used to cycle off -> wake -> open, so
+  // clicking his ear a couple of times to see which mode he was in opened his mic on the way past.
+  // Now it moves between the two resting states, and ends a conversation if one is running.
+  // Talking to him without being called is the right button.
+  if (what === 'ear') setPosture(mic === 'off' ? 'wake' : mic === 'wake' ? 'off' : 'wake');
   if (what === 'fire') setMuted(!stored.muted);
 });
 addEventListener('contextmenu', (e) => {
   if (hitAt(e) !== 'ear') return;
   e.preventDefault();
-  setPosture((stored.mic || 'off') === 'off' ? 'wake' : 'off');
+  setPosture('open');   // talk to him now, without saying his name first
 });
 
 // ---------- Frame ----------
@@ -992,9 +1050,13 @@ function schedule() { if (!rafPending) { rafPending = true; requestAnimationFram
 setInterval(() => {
   // Callbacks stalled while he's visible: drive at ~30 fps. (Hidden: draw nothing, nobody can see.)
   if (!document.hidden && performance.now() - lastRafAt > 400) frame(performance.now());
-  if (ear.ctx?.state === 'suspended') ear.ctx.resume?.();      // audio paused by sleep: wake it
 }, 33);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { rafPending = false; refreshCanvases(); schedule(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { rafPending = false; refreshCanvases(); schedule(); feed.player?.resume().catch(() => {}); } });
+// Coming back from sleep does not always change visibility, but it does fire these.
+addEventListener('focus', () => feed.player?.resume().catch(() => {}));
+// A wake lock is dropped whenever the document hides, so retaking it is part of coming back.
+document.addEventListener('visibilitychange', () => { if (!document.hidden && awake.want) { awake.tried = 0; } });
+addEventListener('online', () => feed.player?.resume().catch(() => {}));
 
 // Self-healing, part two: one bad number (a NaN or Infinity from a spring, a pow of a negative,
 // a timestamp running backwards) sticks in the rig forever and makes every frame throw before it
@@ -1015,7 +1077,7 @@ function note(msg) {
 const lastGood = {};
 function healRig() {
   const bad = [];
-  for (const key of [...EASED, 'mouthOpen', 'mouthWide', 'impulse', 'shake', 'squint']) {
+  for (const key of [...EASED, 'mouthOpen', 'mouthWide', 'impulse', 'kick', 'shake', 'squint']) {
     if (Number.isFinite(rig[key])) { lastGood[key] = rig[key]; continue; }
     bad.push(key); rig[key] = lastGood[key] ?? BASE[key] ?? (key === 'mouthWide' ? 0.75 : 0);
   }
@@ -1051,10 +1113,16 @@ function drawFrame(now) {
   // Pose: which mood wins right now (see Behavior), then actions and gaze on top
   if (moodUntil && now > moodUntil) { mood = 'neutral'; moodUntil = 0; }
   const st = props?.state || {};
-  const busy = (st.activity && st.activity !== 'idle') || queue.length > 0 || now - ear.heardAt < 1000;
+  const busy = !!(st.activity && st.activity !== 'idle');
   if (busy) B.quietSince = now;
   const ov = B.overlay && now < B.overlay.until ? B.overlay : null;
-  const explicitActive = mood !== 'neutral' && (moodUntil > 0 || now - B.quietSince < 45000);
+  // An explicit mood is the feeling behind what Claude just SAID, so it should colour the moment
+  // and then get out of the way. It used to hold for 45 seconds of quiet — but B.quietSince is
+  // pumped every frame he is busy, so during work that window never expired at all and a "happy"
+  // set at the start of a turn sat on his face through the whole job, hiding the fact that he was
+  // working. Measured from when it was set, and shorter while busy, so the activity shows through.
+  const explicitHold = busy ? 14000 : 45000;
+  const explicitActive = mood !== 'neutral' && (moodUntil > now || now - B.explicitAt < explicitHold);
   const explicitFresh = now - B.explicitAt < 12000;
   const resting = restingMood(now);
   const shown = ov && (ov.strong || !explicitActive || !explicitFresh) ? ov.mood
@@ -1066,86 +1134,109 @@ function drawFrame(now) {
   updateWind(now, dt);
   pose.lean += windAngle(LOG.cx, 1, t) * 3;                // his flame leans with the gust (to the right)
   // Idle life: every so often, a little something that fits how long it's been quiet
-  if (!busy && !B.action && !ov && now > B.nextBit) {
+  // Not while he is speaking. `busy` only tracks what Claude is doing, and during his own spoken
+  // reply that is idle — so he was picking random idle business (a stretch, a hop, a proud flare)
+  // in the middle of his own sentences, which is most of what looked like random puffing.
+  if (lastTalking) B.nextBit = Math.max(B.nextBit, now + 1500);
+  if (!busy && !lastTalking && !B.action && !ov && now > B.nextBit) {
     perform(pick(P.idle.bits[resting] || P.idle.bits.neutral));
     B.nextBit = now + (P.idle.every[0] + Math.random() * (P.idle.every[1] - P.idle.every[0])) * 1000;
   }
   let act = null;
   if (B.action) {
-    // A frame's timestamp can be a hair before the action started; a negative p made the yawn NaN
-    const p = Math.max(0, (now - B.action.start) / 1000 / B.action.dur);
-    if (p >= 1) B.action = null; else act = ACTIONS[B.action.name].run(p, pose, t) || {};
+    // 0..1 by construction: a frame's timestamp can land a hair before the action started, and a
+    // zero duration would divide to Infinity. fin() first, because Math.max would pass a NaN on.
+    const p = clamp(fin((now - B.action.start) / 1000 / pos(B.action.dur) || 0, 1), 0, 1);
+    if (p >= 1) B.action = null;
+    else {
+      act = ACTIONS[B.action.name].run(p, pose, t) || {};
+      // Whatever an action returns is clamped here rather than trusted, so one new animation with
+      // a sign error can never reach the rig.
+      act = { open: clamp(fin(act.open, 0), 0, 1.2), wide: clamp(fin(act.wide, BASE.wide), 0, 1.5),
+              dy: clamp(fin(act.dy, 0), -1.5, 1.5) };
+    }
   }
   const gazeHeld = applyGaze(pose, t, now);
   const k = 1 - Math.pow(0.002, dt);
   pose.size *= P.scale ?? 1;
+  // The one gate. Everything the rig eases towards passes through here — moods, actions, gaze and
+  // the persona's own scale — so nothing downstream has to defend itself.
+  sanitizePose(pose);
   for (const key of EASED) rig[key] = lerp(rig[key], pose[key], k);
   const pal = stored.muted ? PAL.sleepy : PAL[pose.heat] || PAL.normal;
   for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) rig.pal[i][j] = lerp(rig.pal[i][j], pal[i][j], k * 0.8);
-  rig.impulse = lerp(rig.impulse, 0, 1 - Math.pow(0.08, dt));
+  // Impulse chases the kick (about a fifth of a second to swell), and the kick drains away, so a
+  // reaction reads as a flare-up and settle instead of a one-frame pop.
+  rig.impulse = lerp(rig.impulse, fin(rig.kick, 0), 1 - Math.pow(0.004, dt));
+  rig.kick = lerp(fin(rig.kick, 0), 0, 1 - Math.pow(0.08, dt));
   rig.shake = Math.max(0, rig.shake - dt * 2.2);
   rig.squint = Math.max(0, rig.squint - dt * 1.6);
   { const bad = healRig(); if (bad.length) note(`non-finite: ${[...new Set(bad)].join(',')} (mood ${shown}, action ${B.action?.name || '-'})`); }
 
-  // Speech layer. Four sources:
-  //   text   the reply text on an estimated timeline (no audio)
-  //   input  an audio input alone: loudness opens the jaw, the spectrum picks the vowel shape
-  //   both   audio for timing and loudness, the text for which vowel it is (see syncText)
-  //   feed   a speech feed: the audio itself plus every word's timing and phonemes, so the
-  //          mouth makes each sound as it's heard
+  // Speech comes from the relay's speech feed: the audio itself plus every word's timing and
+  // phonemes, so his mouth makes each sound as it's heard. The old "lip sync from" choice (guessing
+  // a timeline from the text, or reading loudness off an audio input) is gone — the feed is how
+  // this is run, and the alternatives were only ever worse approximations of it.
   let amp = 0, wide = rig.wide, press = false, line = '';
-  const mode = settings.audioSource || 'text';
-  const useAudio = mode === 'input' || mode === 'both';
-  picker.classList.toggle('on', useAudio);
-  listen(useAudio ? (stored.inputDevice || 'default') : '');
   const posture = stored.mic || 'off', muted = !!stored.muted;
-  useFeed(mode === 'feed' || posture !== 'off'); // his ears use the relay too
-  // Muted: his voice goes silent (the player keeps its clock, so he still mouths the words)
-  const silent = muted || !settings.feedPlayAudio;
-  if (feed.player && feed.muted !== silent) { feed.player.setMuted(silent); feed.muted = silent; }
-  const ears = window.EARS.tick({ client: feed.client, base: feedBase(), posture, sessionId: feed.sessionId, micDevice: (settings.micDevice || '').trim() });
-  if (posture !== 'off' && settings.acks !== false) loadAcks((settings.ackVoice || 'am_calcifer').trim());
-  const heard = useAudio ? hear(settings.audioGain ?? 1) : null;
-  status.textContent = useAudio && ear.err ? ear.err : feed.err && (mode === 'feed' || posture !== 'off') ? feed.err : ears.err || window.SOUNDS?.err || '';
-  let talking = false, syl = null, sylT = 0, item = null;
-  if (mode === 'text') {
-    while (queue.length && now > queue[0].start + queue[0].plan.dur * 1000 + 300) queue.shift();
-    item = queue[0];
-    if (item && now >= item.start) { talking = true; sylT = (now - item.start) / 1000; }
-  }
-  const ackLoud = ackLevel();
-  if (ackLoud !== null && !talking) {                      // a quick reply ("mm-hm?") is playing
-    talking = true; line = ack.line; wide = 0.55;
-    amp = ackLoud;
-  } else if (mode === 'feed') {
-    queue.length = 0; // replies arrive through the feed, with their real timing
-    const m = feedMouth();
-    if (m) {
-      talking = true;
-      line = m.line;
-      if (m.shape) {
-        press = m.shape.press;
-        wide = m.shape.wide;
-        // The phoneme says how far the jaw goes; the voice's loudness scales it, so stressed
-        // and quiet syllables differ and a silence inside a word still closes him up.
-        amp = press ? 0 : m.shape.open * (0.55 + 0.45 * m.loud);
-      }
+  useFeed(true);   // the feed is both his voice and his relay client, so it is always wanted
+  // His voice lives in an AudioContext, and the browser suspends those when the machine sleeps —
+  // nothing resumes them on its own. The reply still arrives, the word timings still arrive, his
+  // mouth still moves, and not a sound comes out; the only thing that used to revive it was a
+  // click. So it is checked every second and resumed, and the fact that it needed resuming is
+  // noted, because a context that keeps suspending itself is worth knowing about.
+  keepAwake(posture === 'open', now);
+  if (feed.player && now - feed.resumeAt > 1000) {
+    const was = feed.player.context?.state;
+    if (was && was !== 'running') {
+      feed.resumeAt = now;
+      feed.player.resume().then(() => note(`audio context was ${was}, resumed`)).catch(() => {});
     }
-  } else if (heard) {
-    talking = now - ear.heardAt < 160; // hold through the tiny gaps inside a word
-    amp = heard.amp; wide = heard.wide;
-    if (mode === 'both') ({ item, t: sylT } = syncText(heard, talking, dt));
   }
-  if (item && (talking || mode === 'text')) {
-    syl = item.plan.syl.find((s) => sylT >= s.t0 && sylT < s.t0 + s.d);
-    for (const c of item.chunks) if (sylT >= c.t0) line = c.text;
+  // Muted: his voice goes silent (the player keeps its clock, so he still mouths the words)
+  if (feed.player && feed.muted !== muted) { feed.player.setMuted(muted); feed.muted = muted; }
+  const ears = window.EARS.tick({ client: feed.client, base: feedBase(), posture, sessionId: feed.sessionId,
+    micDevice: (settings.micDevice || '').trim(),
+    quietMs: Math.max(15, settings.quietSeconds ?? 120) * 1000,
+    followMs: Math.max(0, settings.followUpSeconds ?? 4) * 1000 });
+  status.textContent = feed.err || ears.err || window.SOUNDS?.err || '';
+  // The spotter runs whenever his mic is NOT publishing to the room, on the same input the room
+  // would use: that means "wake", and also the middle of his own turn in a conversation — which is
+  // the only moment a spoken interrupt could ever be heard. It stops once the mic is actually live,
+  // because then LiveKit has it and the conversation decides what he hears.
+  spot.agent = ears.agent;
+  lastAgent = ears.agent;
+  window.SPOTTER.tune(settings.wakeSensitivity ?? 50);   // live, so the slider needs no reload
+  // Its context can be suspended by a machine sleeping, and a suspended one gets no callbacks, so
+  // it cannot revive itself from the inside.
+  const woke = window.SPOTTER.poke?.();
+  if (woke) note(`spotter audio was ${woke}, resumed`);
+  const wantSpot = posture !== 'off' && !!ears.deviceId && ears.phase !== 'listening';
+  if (wantSpot !== spot.want) {
+    spot.want = wantSpot;
+    if (wantSpot) window.SPOTTER.start(ears.deviceId); else window.SPOTTER.stop();
   }
-  if (syl) {
-    const ph = Math.min(1, Math.max(0, (sylT - syl.t0) / syl.d));
-    press = syl.press && ph < 0.25;
-    wide = syl.w;
-    if (mode === 'text') amp = press ? 0 : syl.a * Math.pow(Math.sin(Math.PI * ph), 0.65);
-    else amp = press ? 0 : Math.min(1, heard.raw * syl.a * 1.25); // real loudness, the text's jaw size
+  if (now - spot.statusAt > 3000) {
+    spot.statusAt = now;
+    glass.store({ wakeStatus: { at: new Date().toISOString(), ...window.SPOTTER.state,
+                                wokeHim: spot.woke, echoDropped: spot.echoed, last: spot.last } });
+  }
+  let talking = false;
+  const m = feedMouth();
+  if (m) {
+    talking = true;
+    // His voice is coming out of the speakers right now — true for the whole utterance, including
+    // the gaps between words, since feedMouth only goes null when nothing is playing. The spotter
+    // must not take his own "Calcifer" as being called.
+    spot.hush = now;
+    line = m.line;
+    if (m.shape) {
+      press = m.shape.press;
+      wide = m.shape.wide;
+      // The phoneme says how far the jaw goes; the voice's loudness scales it, so stressed
+      // and quiet syllables differ and a silence inside a word still closes him up.
+      amp = press ? 0 : m.shape.open * (0.55 + 0.45 * m.loud);
+    }
   }
   // Mouth follows speech like a drawn jaw: snaps open, snaps nearly as fast back shut, presses on m/b/p
   if (!talking && act?.wide !== undefined) wide = act.wide;
@@ -1153,11 +1244,15 @@ function drawFrame(now) {
   const targetOpen = talking ? Math.min(1, amp * 0.85) : act?.open ?? rig.open;
   // A feed gives exact targets per sound, so follow them more tightly (still eased, so it reads
   // as a jaw, not a flicker).
-  const tight = mode === 'feed' && talking;
+  const tight = !!m && talking;   // the feed gives exact targets; an estimated timeline does not
   const rate = press ? 1e-7 : tight ? (targetOpen > rig.mouthOpen ? 1e-9 : 1e-8) : targetOpen > rig.mouthOpen ? 1e-6 : 3e-6;
-  rig.mouthOpen = lerp(rig.mouthOpen, targetOpen, 1 - Math.pow(rate, dt));
-  rig.mouthWide = lerp(rig.mouthWide, talking || act?.wide !== undefined ? wide : rig.wide, 1 - Math.pow(tight ? 1e-7 : 1e-4, dt));
+  // The mouth eases outside the pose loop, towards numbers that come from the speech feed's own
+  // levels and phonemes, so it gets the same treatment: bounded targets, never a bare value.
+  rig.mouthOpen = lerp(rig.mouthOpen, clamp(fin(targetOpen, 0), 0, 1.2), 1 - Math.pow(rate, dt));
+  const wideTarget = talking || act?.wide !== undefined ? wide : rig.wide;
+  rig.mouthWide = lerp(rig.mouthWide, clamp(fin(wideTarget, BASE.wide), 0, 1.5), 1 - Math.pow(tight ? 1e-7 : 1e-4, dt));
   sub.textContent = line; sub.classList.toggle('on', !!(settings.subtitles && line));
+  lastTalking = talking;   // read on the next frame, to keep idle fidgets out of his sentences
 
   // Blinks and glances
   if (now > blinkAt && blinkT < 0) blinkT = 0;
@@ -1179,7 +1274,7 @@ function drawFrame(now) {
   // His size and seat come from the log itself in the painting, not from how log.png is cropped
   const logW = LOG.span * S.iw, logH = LOG.thick * S.ih;
   const R0 = logW * 0.44;
-  const size = Math.max(0.35, rig.size + rig.impulse + amp * 0.05 + 0.025 * Math.sin(t * 1.9));
+  const size = clamp(fin(rig.size, 1) + fin(rig.impulse, 0) + fin(amp, 0) * 0.05 + 0.025 * Math.sin(t * 1.9), 0.35, 2.6);
   window.SOUNDS?.tick({ on: settings.sounds !== false, ambience: settings.ambience !== false, volume: (settings.soundVolume ?? 35) / 100,
     size, sway: rig.sway ?? 1, asleep: shown === 'asleep' });
   const R = R0 * size;
@@ -1188,9 +1283,18 @@ function drawFrame(now) {
   const cy = logTop + logH * 0.15 - R * 0.62 + (Math.random() - 0.5) * jit + (act?.dy ?? 0) * R0;
   const glow = (0.55 + 0.45 * size + 0.12 * noise(t * 4, 9)) * (stored.muted ? 0.7 : 1);
 
+  // How often anything takes a new pose. Hand-drawn animation holds each drawing for two frames
+  // rather than redrawing every one, and the whole scene is built to look like that film — so the
+  // flame, the herbs hanging in the room and the shader all step together, off one number. Set it
+  // to 0 and nothing steps: every frame is its own pose, which reads as smooth rather than drawn.
+  const stepRate = Math.max(0, settings.stepRate ?? 12);
+  const stepped = (v) => (stepRate > 0 ? Math.floor(v * stepRate) : -1);
+
   updateSwayers(dt, t);
-  // The hanging things are drawn "on twos" like his flame: a new pose 12 times a second
-  if (Math.floor(t * 12) !== sceneStep) { sceneStep = Math.floor(t * 12); for (const s of swayers) s.shown = s.ang; }
+  // The hanging things take their pose on the same beat as his flame
+  const sceneNow = stepped(t);
+  if (stepRate <= 0) { for (const s of swayers) s.shown = s.ang; }
+  else if (sceneNow !== sceneStep) { sceneStep = sceneNow; for (const s of swayers) s.shown = s.ang; }
   drawHearth(W, H, S, cx, cy, glow);
 
   // Body
@@ -1203,9 +1307,13 @@ function drawFrame(now) {
     gl.uniform1f(uni.uR, R * fireDpr);
     gl.uniform1f(uni.uSway, rig.sway);
     flameClock += dt * rig.sway;
-    const step = Math.floor(t * 12);                       // 12 drawings a second, whatever his mood
-    if (step !== flameStep) { flameStep = step; flameHeld = flameClock; }
+    // The same beat for his flame, whatever his mood — a slow, sad flame moves less per step
+    // rather than taking fewer steps. Smooth (0) hands the clock straight through.
+    const step = stepped(t);
+    if (stepRate <= 0) flameHeld = flameClock;
+    else if (step !== flameStep) { flameStep = step; flameHeld = flameClock; }
     gl.uniform1f(uni.uFlame, flameHeld);
+    gl.uniform1f(uni.uStep, stepRate);
     gl.uniform1f(uni.uLean, rig.lean);
     gl.uniform1f(uni.uGlow, glow);
     gl.uniform1f(uni.uAlpha, BODY_ALPHA * (stored.muted ? 0.75 : 1));
@@ -1262,6 +1370,7 @@ function drawFrame(now) {
     fg.beginPath(); fg.arc(ex, ey, (e.big ? 2.6 : 1.5) * (0.5 + e.life * 0.5), 0, Math.PI * 2); fg.fill();
   }
   fg.shadowBlur = 0;
+  drawWisps(cx, cy, R, t, now);   // last, so what he's working on rises in front of his own embers
 }
 schedule();
 glass.onState(onProps);

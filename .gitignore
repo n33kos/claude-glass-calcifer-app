@@ -2,3 +2,6 @@
 __pycache__/
 # built locally by extras/macos-system-audio/build.sh
 extras/macos-system-audio/calcifer-system-audio
+# nothing in this app is audio or a data array; if one appears, it does not belong in a commit
+*.wav
+*.npy

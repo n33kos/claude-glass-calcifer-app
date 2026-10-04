@@ -2,22 +2,25 @@
 //
 // Mic postures (the stored value `mic`):
 //   off   nothing listens; the mic isn't even open
-//   wake  only his own wake listener runs: each short burst of speech goes to the local Whisper
-//         (the one vmux already runs), and hearing his name starts a conversation
+//   wake  he is in the room but silent in it, while his own spotter (wake/spotter.js) listens for
+//         his name here: three small ONNX models in this window, nothing transcribed and nothing
+//         sent anywhere. Hearing it opens the mic.
 //   open  a conversation: the mic is published to the session's LiveKit room on the user's turn
 //         and closed during Claude's (the SDK's VoiceTurn), exactly like the vmux pane
 // His name plus more ("Calcifer, run the tests") sends the rest at once and stays in conversation.
 // "Calcifer, stop listening", the relay's silence timeout, or a minute of nobody talking on the
 // user's turn drops back to wake. "Calcifer, hush" / "speak up" mute and unmute his voice.
 (function () {
-const WHISPER_URL = 'http://localhost:8100/v1/audio/transcriptions';
+// No transcription happens in this file. He used to have a wake word that cut his own clips and
+// posted them to a Whisper server — a second transcription path beside the relay's, with its own
+// resampler and its own prompt, transcribing three times as much audio as the real conversation
+// only to throw nearly all of it away. That is gone for good. The spotter that replaced it never
+// transcribes anything: it scores 80 ms of audio against his name and says yes or no, and the only
+// words anyone transcribes are the ones LiveKit carries once his mic is actually open.
 const NAME = 'KLSFR';               // "Calcifer", as consonants
-const QUIET_MS = 60000;             // conversation ends after this long with nobody talking
-const COOLDOWN_MS = 1500;           // after Claude's turn: his own voice's tail can't wake him
-const MAX_CLIP_MS = 20000;          // a whole request in one breath ("Calcifer, run the tests and...")
-const END_QUIET_MS = 900;           // a clip ends after this much quiet: a comma's pause doesn't split it
+const QUIET_MS = 120000;            // fallback: conversation ends after this long with nobody talking
 
-// ---------- Hearing his name ----------
+// ---------- Hearing his name in a transcript the relay already made ----------
 // Whisper almost never spells him right ("Call Cypher", "Cal Cipher", "Kels4"), so words are
 // compared by how they sound: their consonant skeleton. Calcifer, Call Cypher, Kels4 -> KLSFR.
 function skeleton(s) {
@@ -85,168 +88,49 @@ function voiceCommand(rest) {
   return null;
 }
 
-// ---------- The mic, for his wake listener and his ear-glow ----------
-const ear = { want: false, stream: null, ctx: null, proc: null, level: 0, floor: 0.004, pre: [], rec: null,
-  armed: false, transcribing: 0, heardAt: 0, err: '', opening: null, choice: null, deviceId: '', label: '' };
+// ---------- Which mic LiveKit should capture from ----------
+// No stream is held here. This only names a device, so the room can be told which one to use.
+const ear = { choice: null, deviceId: '', label: '', note: '', err: '' };
 // Which mic: the setting's name (or any part of it, "AirPods"), else the most reasonable one: the
 // system default unless that's a loopback or virtual device (his own "Calcifer System Audio",
 // BlackHole...), then the built-in mic, then any real one.
 const VIRTUAL = /system audio|blackhole|loopback|aggregate|soundflower|virtual|background music|zoomaudio|teams audio/i;
-// A mic that went quiet for good: macOS keeps listing an iPhone (Continuity) or Bluetooth mic that
-// has gone out of range, and it delivers exact digital silence. It's skipped for a minute (or
-// until devices change), then tried again.
-const dead = { label: '', until: 0 };
-navigator.mediaDevices?.addEventListener?.('devicechange', () => { dead.until = 0; if (ear.stream) closeMic(); });
+navigator.mediaDevices?.addEventListener?.('devicechange', () => { ear.deviceId = ''; });
 async function pickMic(want) {
   const all = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput');
-  const alive = (d) => !(d.label === dead.label && performance.now() < dead.until);
   const inputs = all.filter((d) => d.deviceId !== 'default' && d.deviceId !== 'communications');
   let err = '';
   if (want) {
     const hit = inputs.find((d) => d.label.toLowerCase().includes(want.toLowerCase()));
-    if (hit && alive(hit)) return { device: hit };
-    err = hit ? `${hit.label} is silent (out of range?): using another mic` : `No microphone matches "${want}": using another mic`;
+    if (hit) return { device: hit };
+    err = `No microphone matches "${want}": using another mic`;
   }
   const defLabel = (all.find((d) => d.deviceId === 'default')?.label || '').replace(/^Default\s*-\s*/i, '');
-  const real = inputs.filter((d) => !VIRTUAL.test(d.label) && alive(d));
-  return { err, device: real.find((d) => d.label === defLabel) || real.find((d) => /built-in|macbook/i.test(d.label)) || real[0] || inputs.find(alive) || null };
+  const real = inputs.filter((d) => !VIRTUAL.test(d.label));
+  return { err, device: real.find((d) => d.label === defLabel) || real.find((d) => /built-in|macbook/i.test(d.label)) || real[0] || inputs[0] || null };
 }
-async function openMic() {
-  if (ear.stream || ear.opening) return;
-  const choice = ear.choice;
-  ear.opening = (async () => {
+// Device labels are hidden until the mic has been allowed once, so this asks, reads the list, and
+// lets go of the stream again — LiveKit opens the real one.
+let resolving = null;
+function resolveMic() {
+  if (ear.deviceId || resolving) return;
+  resolving = (async () => {
     try {
-      const voice = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
-      let stream = await navigator.mediaDevices.getUserMedia({ audio: voice }); // also unlocks device names
-      const { device, err } = await pickMic(choice);
-      if (device && stream.getAudioTracks()[0]?.getSettings().deviceId !== device.deviceId) {
-        stream.getTracks().forEach((t) => t.stop());
-        stream = await navigator.mediaDevices.getUserMedia({ audio: { ...voice, deviceId: { exact: device.deviceId } } });
-      }
-      if (!ear.want || ear.choice !== choice) { stream.getTracks().forEach((t) => t.stop()); return; }
-      Object.assign(ear, { deviceId: device?.deviceId || '', label: device?.label || 'default input' });
-      const ctx = new AudioContext();
-      const src = ctx.createMediaStreamSource(stream);
-      const proc = ctx.createScriptProcessor(2048, 1, 1);
-      const sink = ctx.createGain(); sink.gain.value = 0;        // runs the processor, plays nothing
-      src.connect(proc); proc.connect(sink); sink.connect(ctx.destination);
-      proc.onaudioprocess = (e) => onBlock(e.inputBuffer.getChannelData(0), ctx.sampleRate);
-      for (const t of stream.getAudioTracks()) t.addEventListener('ended', () => { closeMic(); });
-      ctx.resume?.();
-      Object.assign(ear, { stream, ctx, proc, err: '', note: err || '' }); // note: shown on hover, not on screen
+      const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const { device, err } = await pickMic(ear.choice);
+      probe.getTracks().forEach((t) => t.stop());
+      Object.assign(ear, { deviceId: device?.deviceId || '', label: device?.label || 'default input', note: err || '', err: '' });
     } catch (e) { ear.err = `Mic: ${e?.message || e}`; }
-    finally { ear.opening = null; }
+    finally { resolving = null; }
   })();
 }
-function closeMic() {
-  ear.stream?.getTracks().forEach((t) => t.stop());
-  ear.proc && (ear.proc.onaudioprocess = null);
-  ear.ctx?.close?.();
-  Object.assign(ear, { stream: null, ctx: null, proc: null, rec: null, pre: [], level: 0, zeroMs: 0 });
-}
-// Every ~40 ms of mic: track loudness, and cut bursts of speech into clips (with a little audio
-// from just before, so the first consonant isn't lost).
-function onBlock(x, rate) {
-  let sum = 0; for (let i = 0; i < x.length; i++) sum += x[i] * x[i];
-  const rms = Math.sqrt(sum / x.length), ms = (x.length / rate) * 1000;
-  ear.level = Math.max(rms * 8, ear.level * 0.82);
-  ear.zeroMs = rms === 0 ? (ear.zeroMs || 0) + ms : 0;  // exact zeros: a dead device, not a quiet room
-  if (!ear.rec) ear.floor = Math.max(1e-4, rms < ear.floor ? ear.floor * 0.9 + rms * 0.1 : ear.floor * 1.0008);
-  const loud = rms > Math.max(0.012, ear.floor * 3);
-  if (loud) ear.heardAt = performance.now();
-  const block = new Float32Array(x);
-  if (!ear.rec) {
-    ear.pre.push(block); if (ear.pre.length > 8) ear.pre.shift();
-    if (loud && ear.armed) { ear.rec = { blocks: [...ear.pre], ms: 0, loudMs: 0, quietMs: 0, rate, startedAt: performance.now() }; ear.pre = []; }
-    return;
-  }
-  const r = ear.rec;
-  r.blocks.push(block); r.ms += ms;
-  if (loud) { r.loudMs += ms; r.quietMs = 0; } else r.quietMs += ms;
-  if (r.quietMs > END_QUIET_MS || r.ms > MAX_CLIP_MS) {
-    ear.rec = null;
-    if (r.loudMs >= 220 && ear.armed) heard(r);
-  }
-}
-// Clips are transcribed one at a time, in order, and he keeps recording meanwhile: a pause after
-// his name ("Calcifer... run the tests") would otherwise lose what came next while the mic room
-// is still opening. So after his name alone, the next few seconds of speech are sent as text.
-const FOLLOW_MS = 5000;
-// What he says himself when called (view.html ACK_LINES), as Whisper might write it
-const OWN_REPLY = /^(?:\W*(?:m+-?h?m+|uh-?huh|yeah|what'?s up|h+m+|i'?m listening|on it|got it|one sec(?:ond)?|okay))+\b\W*/i;
-let chain = Promise.resolve();
-// What he heard and what he made of it, the last 25 clips (stored as `earLog`, for tuning his ear).
-const earLog = [];
-function log(clip, text, did) {
-  earLog.push({ at: new Date().toISOString(), secs: +(clip.ms / 1000).toFixed(1), text, did });
-  if (earLog.length > 25) earLog.shift();
-  ears.onLog?.(earLog.slice());
-}
-function heard(clip) {
-  ear.transcribing++;
-  chain = chain.then(async () => {
-    try {
-      const heardText = await transcribe(clip);
-      // Whisper labels non-speech ("[MUSIC PLAYING]", "*Spanish*", "(mumbling)"), and on noise it
-      // can echo its hint back verbatim ("Calcifer, the fire demon."): neither is the user talking.
-      const text = heardText.replace(/\[[^\]]*\]|\*[^*]*\*|\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
-      if (!text) return log(clip, heardText, 'not speech');
-      if (/fire demon/i.test(text)) return log(clip, heardText, "Whisper echoing its hint: ignored");
-      const m = findName(text);
-      if (m) {
-        if (!m.rest) conv.followUntil = performance.now() + FOLLOW_MS;
-        log(clip, text, m.rest ? `name${m.loose ? ' (loose)' : ''} + "${m.rest}"` : `name${m.loose ? ' (loose)' : ''} alone: listening on`);
-        ears.onName?.(m.rest, text);
-      } else if (clip.startedAt < conv.followUntil && !/^\W*(thank you|thanks|you)\W*$/i.test(text)) {
-        // His own quick reply ("mm-hm?", "what's up?") can be in the clip ahead of the request
-        const said = text.replace(OWN_REPLY, '').trim();
-        if (!said) return log(clip, text, 'his own quick reply: ignored');
-        conv.followUntil = 0;
-        log(clip, text, `follow-up: sent "${said}"`);
-        ears.onFollow?.(said);
-      } else log(clip, text, 'not his name');
-    } catch (e) { ear.err = `Wake listener: ${e?.message || e}`; log(clip, '', `error: ${e?.message || e}`); }
-    finally { ear.transcribing--; }
-  });
-}
-async function transcribe({ blocks, rate }) {
-  let n = 0; for (const b of blocks) n += b.length;
-  const pcm = new Float32Array(n); let o = 0; for (const b of blocks) { pcm.set(b, o); o += b.length; }
-  const out = resample(pcm, rate, 16000);
-  const fd = new FormData();
-  fd.append('file', new Blob([wav(out, 16000)], { type: 'audio/wav' }), 'wake.wav');
-  fd.append('model', 'whisper-1');
-  fd.append('prompt', 'Calcifer, the fire demon.');
-  fd.append('temperature', '0');
-  fd.append('response_format', 'json');
-  // Clips are transcribed one at a time, so a request that never answers would deafen him for good
-  const res = await fetch(WHISPER_URL, { method: 'POST', body: fd, signal: AbortSignal.timeout(15000) });
-  if (!res.ok) throw new Error(`Whisper answered ${res.status}`);
-  ear.err = '';
-  return String((await res.json()).text || '').trim();
-}
-function resample(x, from, to) {
-  if (from === to) return x;
-  const n = Math.floor((x.length * to) / from), out = new Float32Array(n), k = from / to;
-  for (let i = 0; i < n; i++) {           // average over each output sample's span (a cheap low-pass)
-    const a = Math.floor(i * k), b = Math.min(x.length, Math.floor((i + 1) * k));
-    let s = 0; for (let j = a; j < b; j++) s += x[j];
-    out[i] = b > a ? s / (b - a) : x[a] || 0;
-  }
-  return out;
-}
-function wav(x, rate) {
-  const buf = new ArrayBuffer(44 + x.length * 2), v = new DataView(buf);
-  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
-  str(0, 'RIFF'); v.setUint32(4, 36 + x.length * 2, true); str(8, 'WAVE'); str(12, 'fmt ');
-  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true);
-  v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); str(36, 'data'); v.setUint32(40, x.length * 2, true);
-  for (let i = 0; i < x.length; i++) v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, x[i])) * 0x7fff, true);
-  return buf;
-}
-
 // ---------- The conversation: the session's LiveKit room ----------
-const room = { client: null, voice: null, turn: null, unsub: null, busy: false, err: '', live: false, retryAt: 0, loading: null };
+// He joins once and stays joined, reconnecting only if it drops; his mic is switched on and off
+// inside that one connection rather than by joining and leaving. Rejoining per utterance meant a
+// fresh participant and a fresh audio stream for the relay every time (144 in one session), and
+// each one left a stream behind to be cleaned up.
+const room = { client: null, voice: null, turn: null, unsub: null, unfollow: null, micWant: false,
+  busy: false, err: '', live: false, retryAt: 0, loading: null };
 function loadVoiceLibrary(base) {
   if (window.VmuxVoice) return Promise.resolve();
   room.loading ??= new Promise((resolve, reject) => {
@@ -260,10 +144,13 @@ function loadVoiceLibrary(base) {
 }
 async function joinRoom(client, base) {
   room.busy = true;
+  let voice = null;
   try {
     await loadVoiceLibrary(base);
-    const voice = new window.VmuxVoice.VoiceClient(client, { mode: 'full', playAgentAudio: false });
+    voice = new window.VmuxVoice.VoiceClient(client, { mode: 'full', playAgentAudio: false });
     voice.on('micEnabled', (on) => { room.live = on; });
+    // Gone for its own reasons (sleep, a relay restart): forget it and let tick rejoin shortly
+    voice.on('disconnected', () => { if (room.voice === voice) dropRoom(1500); });
     await voice.join();
     // The same mic his ear uses (the LiveKit room is the VoiceClient's own, not in its API)
     const lk = voice.room, deviceId = ear.deviceId;
@@ -271,6 +158,7 @@ async function joinRoom(client, base) {
       lk.options.audioCaptureDefaults = { ...lk.options.audioCaptureDefaults, deviceId };
       await lk.switchActiveDevice('audioinput', deviceId).catch(() => {});
     }
+    await voice.setMicEnabled(false);   // in the room, but silent until his posture opens the mic
     room.deviceId = deviceId;
     const turn = new window.VmuxClient.VoiceTurn('active');
     const follow = () => {
@@ -279,53 +167,148 @@ async function joinRoom(client, base) {
       turn.update(s.agentStatus.state, users);
     };
     follow();
-    Object.assign(room, { client, voice, turn, unsub: client.subscribe(follow), err: '' });
-    voice.followTurn(turn);
+    Object.assign(room, { client, voice, turn, unsub: client.subscribe(follow), err: '', micWant: false });
   } catch (e) {
+    // He may already have joined before this threw. Leave, or he sits in the room as a publisher
+    // nothing is tracking and the next attempt puts another one in beside him.
+    if (voice) { try { await voice.leave(); } catch {} }
     room.err = `Mic room: ${e?.message || e}`;
     room.retryAt = performance.now() + 5000;
   } finally { room.busy = false; }
 }
+// Forget a room that is already gone (nothing to leave), so tick rejoins after `wait` ms.
+function dropRoom(wait) {
+  const { unsub, unfollow } = room;
+  Object.assign(room, { client: null, voice: null, turn: null, unsub: null, unfollow: null,
+    live: false, micWant: false, retryAt: performance.now() + wait });
+  unfollow?.(); unsub?.();
+}
+// Audio is pumped into the held connection only while he's listening: the turn drives the mic
+// while he's open, and otherwise the mic goes off — never the connection.
+async function setMicLive(on) {
+  const { voice, turn } = room;
+  if (!voice) return;
+  room.micWant = on;
+  try {
+    if (on && turn) room.unfollow = voice.followTurn(turn);
+    else { room.unfollow?.(); room.unfollow = null; await voice.setMicEnabled(false); }
+  } catch (e) { room.err = `Mic: ${e?.message || e}`; }
+}
 async function leaveRoom() {
-  const { voice, unsub } = room;
-  Object.assign(room, { client: null, voice: null, turn: null, unsub: null, live: false });
-  unsub?.();
+  const { voice, unsub, unfollow } = room;
+  Object.assign(room, { client: null, voice: null, turn: null, unsub: null, unfollow: null, live: false, micWant: false });
+  unfollow?.(); unsub?.();
   if (voice) { room.busy = true; try { await voice.leave(); } catch {} room.busy = false; }
 }
 
+// ---------- How loud the user is, right now ----------
+// Nothing in the vmux SDK reports this: SpeechPlayer.level() is *his* voice coming out, and the
+// LiveKit room's own speaker levels are server-side and too coarse and too late. So an analyser
+// hangs off the local mic track — connected to nothing else, so it reads the audio without a
+// single sample reaching the speakers.
+//
+// Two things depend on it. The coals pulse with it, so it is visibly his hearing rather than a
+// lamp that is on. And it is evidence that someone is talking *now*, which transcripts cannot be:
+// a transcript only lands once an utterance has finished and been sent away, several seconds late.
+// The follow-up window was closing mid-sentence for exactly that reason.
+const meter = { ctx: null, src: null, node: null, buf: null, level: 0, track: null };
+const SPEAKING = 0.012;        // raw RMS above this and someone is saying something
+
+function attachMeter(lk) {
+  try {
+    const lp = lk?.localParticipant;
+    const pubs = lp?.audioTrackPublications ?? lp?.audioTracks ?? lp?.trackPublications;
+    const list = pubs ? (typeof pubs.values === 'function' ? [...pubs.values()] : [...pubs]) : [];
+    const track = list.map((p) => p?.track?.mediaStreamTrack)
+      .find((t) => t && t.kind === 'audio' && t.readyState === 'live');
+    if (!track || track === meter.track) return;
+    detachMeter();
+    meter.ctx ??= new AudioContext();
+    meter.track = track;
+    meter.src = meter.ctx.createMediaStreamSource(new MediaStream([track]));
+    meter.node = meter.ctx.createAnalyser();
+    meter.node.fftSize = 512;
+    meter.buf = new Float32Array(meter.node.fftSize);
+    meter.src.connect(meter.node);         // and no further: an analyser is a dead end
+    meter.ctx.resume?.();
+  } catch { /* a level meter is a nicety; never let it take the mic down with it */ }
+}
+
+function detachMeter() {
+  try { meter.src?.disconnect(); meter.node?.disconnect(); } catch {}
+  Object.assign(meter, { src: null, node: null, buf: null, track: null, level: 0 });
+}
+
+function readLevel() {
+  // Same hazard as everywhere else audio lives: a sleeping machine suspends the context, and a
+  // suspended analyser reads a flat zero forever — which would look exactly like a silent room and
+  // would quietly take the coals and the speech timer with it.
+  if (meter.ctx && meter.ctx.state !== 'running') meter.ctx.resume?.().catch(() => {});
+  if (!meter.node || !meter.buf) return 0;
+  meter.node.getFloatTimeDomainData(meter.buf);
+  let sum = 0;
+  for (let i = 0; i < meter.buf.length; i++) sum += meter.buf[i] * meter.buf[i];
+  const rms = Math.sqrt(sum / meter.buf.length);
+  // Fast attack, slow release: the coals catch each syllable but don't strobe between them.
+  meter.level = rms > meter.level ? rms * 0.6 + meter.level * 0.4 : rms * 0.12 + meter.level * 0.88;
+  return meter.level;
+}
+
 // ---------- Each frame ----------
-const conv = { silenceSeq: null, usersSeen: null, idleSince: 0, claudeTurnEnded: 0, spokeAt: 0, followUntil: 0, statusAt: 0 };
+const conv = { silenceSeq: null, usersSeen: null, idleSince: 0, claudeTurnEnded: 0, statusAt: 0,
+               spokeAt: 0, wasClaudesTurn: false, followUntil: 0 };
 const ears = {
   findName, skeleton, voiceCommand, endsConversation,
-  onName: null,
+  // ---------- Butting in ----------
+  // Three separate things have to happen to interrupt him, and the SDK already has all three:
+  // stop Claude generating (`interrupt`), stop the speech that is already queued at the relay
+  // (`cancelTts` — otherwise he keeps talking through the reply that has been abandoned), and
+  // put the mic live *during* what is still Claude's turn, which `VoiceTurn.beginTalkOver` exists
+  // for. Without the last one the mic stays shut until the turn ends and the interruption is
+  // silent.
+  barge(sessionId) {
+    const { client, turn } = room;
+    if (!client) return false;
+    try { client.interrupt(); } catch {}
+    try { if (sessionId) client.cancelTts(sessionId); } catch {}
+    try { turn?.beginTalkOver(); } catch {}
+    conv.spokeAt = performance.now();   // treat it as the start of their turn, not a dead moment
+    conv.followUntil = 0;
+    return true;
+  },
   // ctx: { client, base, posture, sessionId }; returns what the scene shows.
-  tick({ client, base, posture, sessionId, micDevice = '' }) {
+  tick({ client, base, posture, sessionId, micDevice = '', quietMs = QUIET_MS, followMs = 0 }) {
     const now = performance.now();
-    if (ear.choice !== micDevice) { ear.choice = micDevice; closeMic(); }   // a different mic chosen
-    if (ear.stream && ear.zeroMs > 3000) {                                   // its mic went dead: switch
-      Object.assign(dead, { label: ear.label, until: now + 60000 });
-      ear.zeroMs = 0; closeMic();
-    }
-    if (dead.until && now > dead.until && ear.stream && ear.label !== dead.label && ear.choice) { dead.until = 0; closeMic(); } // retry the chosen one
+    if (ear.choice !== micDevice) { ear.choice = micDevice; ear.deviceId = ''; }   // a different mic chosen
+    if (posture !== 'off') resolveMic();
     if (room.voice && !room.busy && ear.deviceId && room.deviceId !== ear.deviceId) leaveRoom(); // rejoin on it
-    ear.want = posture !== 'off';
-    if (ear.want) openMic(); else if (ear.stream) closeMic();
     const s = client?.getState();
     const agent = s?.agentStatus?.state || 'idle';
     const usersTurn = agent === 'idle';
     if (!usersTurn) conv.claudeTurnEnded = now;
-    if (agent === 'speaking') conv.spokeAt = now;
-    // His wake listener listens except while Claude's voice is playing (and just after), so he can
-    // be called while Claude works but can't wake himself. Just after his name it keeps listening
-    // (the follow-up), and the room's mic waits until it's done.
-    const following = posture === 'open' && agent !== 'speaking' && (now < conv.followUntil || ear.transcribing > 0);
-    ear.armed = (posture === 'wake' && agent !== 'speaking' && now - conv.spokeAt > COOLDOWN_MS) || following;
-    if (!ear.armed) ear.rec = null;
 
-    // Conversation: in the room while open, out of it otherwise
+    // Conversation: he joins while his ear is on at all and holds that connection. Posture decides
+    // whether his mic is live in it, not whether he's in the room.
     const ready = client && s?.connectedSessionId === sessionId;
-    if (posture === 'open' && ready && !following && !ear.rec && !room.voice && !room.busy && now > room.retryAt) joinRoom(client, base);
-    if ((posture !== 'open' || (room.client && room.client !== client)) && room.voice && !room.busy) leaveRoom();
+    const wantRoom = posture !== 'off' && ready;
+    if (wantRoom && !room.voice && !room.busy && now > room.retryAt) joinRoom(client, base);
+    if ((!wantRoom || (room.client && room.client !== client)) && room.voice && !room.busy) leaveRoom();
+    // Open means his mic is live in the room. Nothing else listens: no local stream, no clips.
+    const micLive = posture === 'open';
+    if (room.voice && !room.busy && room.micWant !== micLive) setMicLive(micLive);
+
+    // Is someone talking into it this instant?
+    if (room.live && room.voice?.room) attachMeter(room.voice.room);
+    else if (!room.live && meter.track) detachMeter();
+    const level = room.live ? readLevel() : 0;
+    if (level > SPEAKING) {
+      // Proof of speech, and the only timely proof there is. It resets the quiet countdown and
+      // cancels the follow-up window, so starting to talk inside that window keeps the mic open
+      // for as long as the user keeps going — the same behaviour as being called by name, because
+      // it is now literally the same timer.
+      conv.spokeAt = now;
+      conv.followUntil = 0;
+    }
 
     // Ending a conversation: the relay's silence signal, or a long quiet on the user's turn
     if (s) {
@@ -334,34 +317,60 @@ const ears = {
         conv.silenceSeq = s.disableAutoListenSeq;
         if (posture === 'open') ears.onCommand?.('stop', 'silence');
       }
-      if (posture === 'open' && usersTurn && room.voice) {
-        conv.idleSince ||= now;
-        if (now - Math.max(conv.idleSince, ear.heardAt, conv.claudeTurnEnded) > QUIET_MS) ears.onCommand?.('stop', 'quiet');
-      } else conv.idleSince = 0;
-      // Spoken commands during a conversation arrive in the transcript, already transcribed
+      // Spoken commands during a conversation arrive in the transcript, already transcribed. Read
+      // before the quiet timer, because every utterance that lands is proof he should keep waiting.
       const users = (s.transcripts[sessionId] || []).filter((e) => e.speaker === 'user');
       if (conv.usersSeen === null) conv.usersSeen = users.length;
       for (const e of users.slice(conv.usersSeen)) {
+        conv.spokeAt = now;
+        conv.followUntil = 0;        // he answered the opening, so this is a conversation again
         const m = findName(e.text || ''), cmd = m ? voiceCommand(m.rest) : endsConversation(e.text || '');
         if (cmd) ears.onCommand?.(cmd, 'transcript');
       }
       conv.usersSeen = users.length;
+
+      if (posture === 'open' && usersTurn && room.voice) {
+        conv.idleSince ||= now;
+        // The clock runs from the last thing that happened, the user's last utterance included.
+        // It used to run from whenever the turn began, so talking for longer than the timeout
+        // dropped him mid-sentence — the opposite of letting someone speak as long as they like.
+        const last = Math.max(conv.idleSince, conv.claudeTurnEnded, conv.spokeAt);
+        if (now - last > quietMs) ears.onCommand?.('stop', 'quiet');
+        // The follow-up window: opened for a few seconds after Claude finishes so a reply needs no
+        // second calling. Nothing said in that window and he goes back to listening for his name.
+        if (conv.followUntil && now > conv.followUntil) {
+          conv.followUntil = 0;
+          ears.onCommand?.('stop', 'no follow-up');
+        }
+      } else conv.idleSince = 0;
+
+      // Claude just stopped talking. If they were mid-conversation, open his mic again rather than
+      // make them say his name to answer the thing he just said.
+      if (usersTurn && conv.wasClaudesTurn && followMs > 0 && posture === 'wake'
+          && conv.spokeAt && now - conv.spokeAt < 180000) {
+        conv.followUntil = now + followMs;
+        ears.onCommand?.('follow', 'turn ended');
+      }
+      conv.wasClaudesTurn = !usersTurn;
     }
 
     const phase = posture === 'off' ? 'off'
-      : posture === 'wake' ? (ear.rec || ear.transcribing ? 'hearing' : ear.armed ? 'wake' : 'resting')
-      : following ? 'listening'
       : !room.voice ? 'joining'
+      : posture === 'wake' ? 'waking'
       : room.live ? 'listening' : 'waiting';
     // Why he is or isn't listening, for `claude-glass stored calcifer` (earStatus), every few seconds
     if (now - conv.statusAt > 3000) {
       conv.statusAt = now;
-      ears.onStatus?.({ at: new Date().toISOString(), posture, phase, agent, armed: ear.armed, micOpen: !!ear.stream,
-        mic: ear.label, recording: !!ear.rec, transcribing: ear.transcribing, level: +ear.level.toFixed(3),
-        floor: +ear.floor.toFixed(4), room: room.voice ? (room.live ? 'mic live' : 'joined') : room.busy ? 'joining' : 'none',
+      ears.onStatus?.({ at: new Date().toISOString(), posture, phase, agent, mic: ear.label,
+        room: room.voice ? (room.live ? 'mic live' : 'joined') : room.busy ? 'joining' : 'none',
         relay: s ? (s.connectedSessionId === sessionId ? 'connected' : `session ${s.connectedSessionId}`) : 'no client', note: ear.note || '', err: ear.err || room.err || '' });
     }
-    return { phase, level: Math.min(1, ear.level), err: ear.err || room.err, mic: ear.note ? `${ear.label} (${ear.note})` : ear.label };
+    // deviceId goes out so the spotter opens the very same input he would publish from — picking
+    // its own would make the thing that hears his name and the thing that carries the sentence
+    // after it two different microphones.
+    return { phase, level: Math.min(1, level * 5), deviceId: ear.deviceId, agent,
+             err: ear.err || room.err,
+             mic: ear.note ? `${ear.label} (${ear.note})` : ear.label };
   },
   onCommand: null,
 };

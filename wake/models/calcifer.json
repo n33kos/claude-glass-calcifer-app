@@ -1,0 +1,9 @@
+{
+  "threshold": 0.5,
+  "frames": 16,
+  "dim": 96,
+  "recall_held_out": 0.824,
+  "false_wakes_per_hour": 0.093,
+  "measured_on": "10.7 hours of continuous real-world audio (openWakeWord validation set)",
+  "trained_against": "400000 real-world negative windows plus synthesised and recorded speech"
+}

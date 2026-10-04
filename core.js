@@ -32,6 +32,70 @@ const MAX_TEXT = 4000;
   } catch { /* never let the helper break the app */ }
 })();
 
+// ---------- He answers out loud when a spoken request lands ----------
+// The second impure thing in here, and deliberate. "On it." goes to the relay's own TTS, so it
+// comes back down the speech feed with word timings and phonemes already attached and his mouth is
+// synced to it — which is the whole point. Claude is never involved, and he is not fetching and
+// playing a clip himself any more.
+//
+// This used to be a shell hook registered in the user's own ~/.claude/settings.json, on the theory
+// that POST /tts needs the `control` scope while the app's feed token only has `speak`. That was
+// the wrong conclusion: the scope is only a problem for the *browser* side. core.js runs in the
+// glass process with full Node access, so it can read the daemon secret the same way any vmux hook
+// does, and nothing about Calcifer has to live in the user's global configuration.
+// Each one is a few words, never a bare "Right." — Kokoro mangles a single word with no phrase
+// around it to shape the prosody. Still short, because the relay goes deaf to incoming audio for
+// as long as it is speaking. And they sound like him rather than like a progress bar.
+const ACK_LINES = [
+  'On it, on it.',
+  'Right, let me look.',
+  'Hm. Let me see that.',
+  'Give me a moment.',
+  'Working on it now.',
+  'Yes, yes, I heard you.',
+  'Let me stoke that up.',
+  'Let me poke at this.',
+  'Fine, fine. Looking now.',
+  'Hah. Easy enough for me.',
+];
+const ACK_WINDOW_MS = 120000;   // how long after being called a prompt still counts as spoken
+const ACK_GAP_MS = 4000;        // never two in a row on top of each other
+let ackLast = 0;
+let ackLine = '';
+
+function relaySessionId(cwd) {
+  // sha256(project_dir)[:12] — the same id the rest of vmux derives.
+  return require('node:crypto').createHash('sha256').update(String(cwd)).digest('hex').slice(0, 12);
+}
+
+function speakAck(cwd) {
+  try {
+    const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+    const secretFile = path.join(os.homedir(), '.claude', 'voice-multiplexer', 'daemon.secret');
+    if (!fs.existsSync(secretFile)) return;
+    const secret = fs.readFileSync(secretFile, 'utf8').trim();
+    if (!secret) return;
+    // Varied, because the relay silently drops a line it just said; and short, because it goes
+    // deaf to incoming audio for as long as it is speaking.
+    const choices = ACK_LINES.filter((l) => l !== ackLine);
+    const text = choices[Math.floor(Math.random() * choices.length)];
+    ackLine = text;
+    const body = JSON.stringify({ text });
+    const req = require('node:http').request({
+      host: process.env.RELAY_HOST || '127.0.0.1',
+      port: Number(process.env.RELAY_PORT || 3100),
+      path: `/api/sessions/${relaySessionId(cwd)}/tts`,
+      method: 'POST',
+      timeout: 3000,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body),
+                 'X-Daemon-Secret': secret },
+    });
+    req.on('error', () => {});      // the relay being down is not his problem
+    req.on('timeout', () => req.destroy());
+    req.end(body);
+  } catch { /* never let a greeting break the app */ }
+}
+
 exports.init = () => ({
   mood: 'neutral', moodFor: 0, moodSeq: 0,
   speech: null, // { text, seq }
@@ -39,6 +103,8 @@ exports.init = () => ({
   cue: null, // { name, seq, tool }
   activity: 'idle', // idle | thinking | working
   tool: '',
+  doing: null, // { text, tool, seq } — what the current tool call is doing, for the wisps
+  cwd: '', // the project folder, kept because turn.start doesn't carry it and the ack needs it
   failStreak: 0,
   seq: 0,
   spoken: [], // text block ids already spoken (capped)
@@ -109,6 +175,21 @@ function cueForStart(ev) {
   return null;
 }
 
+// One short line saying what a tool call is actually doing, for the wisps rising off him. The event
+// already carries the tool's input, so nothing outside this app needs hooking or configuring to get
+// at it — `activity` and `tool` arrive by the same route.
+function doingText(ev) {
+  const t = String(ev.tool ?? '');
+  const i = ev.input || {};
+  const one = (s) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  if (t === 'Bash') return one(i.command) || t;
+  const file = String(i.file_path ?? i.notebook_path ?? '');
+  if (file) return one(`${t} ${file.split('/').pop()}`);
+  if (i.pattern) return one(`${t} ${i.pattern}`);
+  if (i.url) return one(`${t} ${i.url}`);
+  return t;
+}
+
 function cueForEnd(ev, failStreak) {
   const t = ev.tool, cmd = String(ev.input?.command ?? '');
   if (ev.error) {
@@ -127,18 +208,38 @@ function cueForEnd(ev, failStreak) {
   return null;
 }
 
-exports.onEvent = (state, event) => {
+exports.onEvent = (state, event, ctx) => {
   switch (event.e) {
-    case 'session.start':
-      return event.source === 'compact' ? state : withCue(state, 'wake', { activity: 'idle', tool: '', failStreak: 0 });
-    case 'turn.start':
+    case 'session.start': {
+      const cwd = String(event.cwd ?? state.cwd ?? '');
+      return event.source === 'compact' ? { ...state, cwd }
+        : withCue(state, 'wake', { activity: 'idle', tool: '', failStreak: 0, cwd });
+    }
+    case 'turn.start': {
+      // He speaks only when he was called by name. `calledAt` is the signal rather than his
+      // posture, because posture doesn't survive the trip: the relay bumps its disable-auto-listen
+      // signal on any noise-only clip, and ears.js reads that as "stop listening", so he is often
+      // back to `wake` by the time a turn begins. Typed prompts leave him quiet, which is right.
+      const called = Number(ctx?.stored?.calledAt ?? 0);
+      const since = Date.now() - called;
+      const now = Date.now();
+      if (state.cwd && called > 0 && since >= 0 && since <= ACK_WINDOW_MS
+          && !ctx?.stored?.muted && now - ackLast > ACK_GAP_MS) {
+        ackLast = now;
+        speakAck(state.cwd);
+      }
       return withCue(state, 'listen', { activity: 'thinking', tool: '' });
+    }
     case 'tool.start': {
       if (event.agentId) return state;
       const tool = String(event.tool ?? '');
       const name = cueForStart(event);
-      const next = { ...state, activity: 'working', tool };
-      return name ? withCue(next, name, { tool }) : next;
+      // seq is bumped even with no cue, because `doing` is new on every call and the view notices
+      // state changes by seq.
+      const seq = bump(state);
+      const next = { ...state, seq, activity: 'working', tool, cwd: String(event.cwd ?? state.cwd ?? ''),
+                     doing: { text: doingText(event), tool, seq } };
+      return name ? { ...next, cue: { name, seq, tool } } : next;
     }
     case 'tool.end': {
       if (event.agentId) return state;
