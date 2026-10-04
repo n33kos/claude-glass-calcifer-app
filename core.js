@@ -105,6 +105,10 @@ exports.init = () => ({
   tool: '',
   doing: null, // { text, tool, seq } — what the current tool call is doing, for the wisps
   cwd: '', // the project folder, kept because turn.start doesn't carry it and the ack needs it
+  // What's left of the plan's allowance, for showing somewhere in the scene. The glass dispatches
+  // every session event to apps, `usage` included, but it only puts cwd/activity/ended/waiting in
+  // the view's `session` prop — so this is the one route to it.
+  usage: null, // { at, session, week, spend, context: {tokens, window, percent}, cost: {usd}, limits: [...] }
   failStreak: 0,
   seq: 0,
   spoken: [], // text block ids already spoken (capped)
@@ -250,6 +254,31 @@ exports.onEvent = (state, event, ctx) => {
     }
     case 'permission':
       return withCue(state, 'permission', { tool: String(event.tool ?? '') });
+    case 'usage': {
+      // No cue and no seq bump: this arrives after every turn and means nothing dramatic, it just
+      // has to be available when the scene next draws.
+      const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+      // Claude Code names these windows itself — `five_hour`, `seven_day`, and a gateway's
+      // `spend_limit` (SessionRateLimit in claude-code.d.ts). Matched by name, never inferred from
+      // which resets soonest: a guess like that is one scheduling change away from showing the
+      // week's figure as the hour's, which is worse than showing nothing.
+      const limits = (Array.isArray(event.rateLimits) ? event.rateLimits : []).slice(0, 6).map((r) => ({
+        kind: String(r.kind ?? ''),
+        // Past 100 is real on an exceeded spend limit, so only the floor is clamped.
+        percent: Math.max(0, num(r.percentUsed)),
+        ...(r.resetsAt ? { resetsAt: String(r.resetsAt) } : {}),
+      }));
+      const pick = (kind) => limits.find((l) => l.kind === kind) ?? null;
+      return { ...state, usage: {
+        at: Date.now(),
+        session: pick('five_hour'),      // the sitting
+        week: pick('seven_day'),         // the long haul
+        spend: pick('spend_limit'),      // only on a gateway
+        ...(event.context ? { context: { tokens: num(event.context.tokens), window: num(event.context.window), percent: num(event.context.percent) } } : {}),
+        ...(event.cost ? { cost: { usd: num(event.cost.usd) } } : {}),
+        limits,
+      } };
+    }
     case 'agent.end':
       return withCue(state, 'agentBack');
     case 'text': {

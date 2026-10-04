@@ -30,27 +30,27 @@ window.PERSONA = {
   // (focused), excitement or anger make him tower.
   scale: 0.72,
   base: { size: 1, lean: 0, sway: 1, heat: 'normal', eye: 1, tall: 1, lid: 0, tilt: 0, smileEyes: 0, pupil: 1,
-    px: 0, py: 0, open: 0, wide: 0.8, curve: 0.25, teeth: 0, embers: 0.3, tremble: 0, hug: 0.5 },
+    px: 0, py: 0, open: 0, wide: 0.8, curve: 0.25, teeth: 0, embers: 0.3, tremble: 0, hug: 0.5, armLift: 0 },
 
   // After the film: his eyes stay round cream ovals almost always. Expression comes from the
   // mouth band (bend, how open), pupil size and gaze, eye size, and only a hint of eye shape.
   moods: {
     neutral:  {},
-    happy:    { size: 1.08, heat: 'happy', smileEyes: 0.25, curve: 0.9, open: 0.18, wide: 0.95, embers: 0.5, hug: 0.75 },
+    happy:    { size: 1.08, heat: 'happy', smileEyes: 0.25, curve: 0.9, open: 0.18, wide: 0.95, embers: 0.5, hug: 0.75, armLift: 0.16 },
     grumpy:   { size: 0.94, lid: 0.18, tilt: 0.35, pupil: 0.85, py: 0.1, curve: -0.35, open: 0, wide: 0.9, lean: -0.05, hug: 0.3 },
-    angry:    { size: 1.34, heat: 'angry', eye: 1.08, pupil: 0.7, lid: 0.1, tilt: 0.45, curve: -0.6, open: 0.5, wide: 1, embers: 1.2, tremble: 0.5, sway: 1.6, hug: 0.15 },
-    sad:      { size: 0.72, heat: 'sad', lid: 0.14, tilt: -0.45, py: 0.4, curve: -0.6, open: 0, wide: 0.6, embers: 0, sway: 0.55, hug: 1 },
-    scared:   { size: 0.78, eye: 1.2, tall: 1.3, pupil: 0.6, curve: -0.2, open: 0.4, wide: 0.3, tremble: 1, embers: 0.1, hug: 1 },
+    angry:    { size: 1.34, heat: 'angry', eye: 1.08, pupil: 0.7, lid: 0.1, tilt: 0.45, curve: -0.6, open: 0.5, wide: 1, embers: 1.2, tremble: 0.5, sway: 1.6, hug: 0.15, armLift: 0.68 },
+    sad:      { size: 0.72, heat: 'sad', lid: 0.14, tilt: -0.45, py: 0.4, curve: -0.6, open: 0, wide: 0.6, embers: 0, sway: 0.55, hug: 1, armLift: 0.05 },
+    scared:   { size: 0.78, eye: 1.2, tall: 1.3, pupil: 0.6, curve: -0.2, open: 0.4, wide: 0.3, tremble: 1, embers: 0.1, hug: 1, armLift: 0.5 },
     thinking: { size: 1.08, lid: 0.08, px: 0.6, py: -0.65, curve: -0.15, open: 0, wide: 0.5, lean: 0.06 },
-    sleepy:   { size: 0.74, heat: 'sleepy', lid: 0.55, py: 0.3, curve: 0.05, open: 0.06, wide: 0.45, embers: 0.05, sway: 0.4, hug: 0.85 },
-    smug:     { size: 1.04, lid: 0.28, tilt: -0.15, px: 0.6, curve: 0.65, open: 0, wide: 0.85, lean: 0.08 },
-    excited:  { size: 1.24, heat: 'excited', eye: 1.12, tall: 1.15, pupil: 0.9, curve: 0.8, open: 0.55, wide: 0.75, embers: 1.2, sway: 1.4, hug: 0.6 },
-    curious:  { eye: 1.08, tall: 1.12, pupil: 0.9, py: -0.15, curve: 0.1, open: 0.1, wide: 0.25, lean: 0.04 },
+    sleepy:   { size: 0.74, heat: 'sleepy', lid: 0.55, py: 0.3, curve: 0.05, open: 0.06, wide: 0.45, embers: 0.05, sway: 0.4, hug: 0.85, armLift: 0.04 },
+    smug:     { size: 1.04, lid: 0.28, tilt: -0.15, px: 0.6, curve: 0.65, open: 0, wide: 0.85, lean: 0.08, armLift: 0.08 },
+    excited:  { size: 1.24, heat: 'excited', eye: 1.12, tall: 1.15, pupil: 0.9, curve: 0.8, open: 0.55, wide: 0.75, embers: 1.2, sway: 1.4, hug: 0.6, armLift: 0.7 },
+    curious:  { eye: 1.08, tall: 1.12, pupil: 0.9, py: -0.15, curve: 0.1, open: 0.1, wide: 0.25, lean: 0.04, armLift: 0.14 },
     focused:  { size: 1.2, lid: 0.2, tilt: 0.15, pupil: 0.8, py: 0.4, curve: -0.05, open: 0, wide: 0.6, sway: 1.15 },
-    bored:    { size: 0.9, lid: 0.36, py: 0.25, px: -0.3, curve: -0.2, open: 0, wide: 0.7, sway: 0.7, lean: -0.04 },
-    proud:    { size: 1.15, heat: 'happy', lid: 0.2, tilt: -0.1, py: -0.25, curve: 0.7, open: 0, wide: 0.9, embers: 0.8, lean: 0.03 },
-    nervous:  { size: 0.9, eye: 1.05, tall: 1.12, pupil: 0.65, curve: -0.25, open: 0.04, wide: 0.9, tremble: 0.35, hug: 0.95 },
-    asleep:   { size: 0.66, heat: 'sleepy', lid: 1, curve: 0.1, open: 0.03, wide: 0.5, embers: 0, sway: 0.3, hug: 0.9 },
+    bored:    { size: 0.9, lid: 0.36, py: 0.25, px: -0.3, curve: -0.2, open: 0, wide: 0.7, sway: 0.7, lean: -0.04, armLift: 0 },
+    proud:    { size: 1.15, heat: 'happy', lid: 0.2, tilt: -0.1, py: -0.25, curve: 0.7, open: 0, wide: 0.9, embers: 0.8, lean: 0.03, armLift: 0.34 },
+    nervous:  { size: 0.9, eye: 1.05, tall: 1.12, pupil: 0.65, curve: -0.25, open: 0.04, wide: 0.9, tremble: 0.35, hug: 0.95, armLift: 0.26 },
+    asleep:   { size: 0.66, heat: 'sleepy', lid: 1, curve: 0.1, open: 0.03, wide: 0.5, embers: 0, sway: 0.3, hug: 0.9, armLift: 0 },
   },
 
   // Grumbly, proud, a show-off when things go well, a coward when they get risky.

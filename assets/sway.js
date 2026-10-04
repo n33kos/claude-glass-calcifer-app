@@ -4,6 +4,13 @@
 window.HEARTH_SRC = 'assets/hearth-bare.jpg?v=740b39df';
 window.LOG_SRC = 'assets/log.png?v=d9e922d9';
 window.LOG_RECT = {"x": 0.3659018987341772, "y": 0.6898584905660378, "w": 0.26700949367088606, "h": 0.20047169811320756};
+// Props that show how much of the plan's allowance is left. Not hung and not swaying — they sit
+// on the stone. Each was painted INTO this very picture by handing the model the bare hearth, then
+// cut back out, so the perspective, palette and light are the scene's own rather than a prop's.
+window.PROPS = [
+ { "id": "logs",     "src": "assets/props-logs.png?v=01d13638",     "x": 0.653879, "y": 0.712851, "w": 0.247231, "h": 0.223467 },
+ { "id": "kindling", "src": "assets/props-kindling.png?v=98113bab", "x": 0.137263, "y": 0.623231, "w": 0.172864, "h": 0.343750 }
+];
 window.SWAY = [
  {
   "id": "lavender",

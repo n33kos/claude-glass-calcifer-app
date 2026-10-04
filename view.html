@@ -21,13 +21,13 @@
 <div id="sub"></div>
 <div id="status"></div>
 <script src="glass-app://sdk/glass-app.js"></script>
-<script src="persona/calcifer.js?v=4"></script><!-- bump ?v= when the persona changes -->
+<script src="persona/calcifer.js?v=6"></script><!-- bump ?v= when the persona changes -->
 <script src="lipsync.js?v=1"></script><!-- bump ?v= when lip sync changes -->
 <script src="ears.js?v=25"></script><!-- bump ?v= when the ears change -->
 <script src="sounds.js?v=4"></script><!-- bump ?v= when the sounds change -->
 <script src="vendor/ort/ort.wasm.min.js"></script><!-- ONNX Runtime Web, wasm only (vendored, 1.30.0) -->
 <script src="wake/spotter.js?v=5"></script><!-- hears his name locally; bump ?v= when it changes -->
-<script src="assets/sway.js?v=9"></script><!-- bump ?v= when the scene's images change -->
+<script src="assets/sway.js?v=10"></script><!-- bump ?v= when the scene's images change -->
 
 <script>
 /*
@@ -62,7 +62,7 @@ const P = window.PERSONA;
 const PAL = P.palettes, BASE = P.base, MOODS = P.moods;
 const CORE_LIGHT = [1.0, 0.95, 0.68];
 const BODY_ALPHA = 0.85; // his flame (body and arms); the face layer has its own opacity in CSS
-const EASED = ['size', 'lean', 'sway', 'eye', 'tall', 'lid', 'tilt', 'smileEyes', 'pupil', 'px', 'py', 'open', 'wide', 'curve', 'teeth', 'embers', 'tremble', 'hug'];
+const EASED = ['size', 'lean', 'sway', 'eye', 'tall', 'lid', 'tilt', 'smileEyes', 'pupil', 'px', 'py', 'open', 'wide', 'curve', 'teeth', 'embers', 'tremble', 'hug', 'armLift'];
 
 // ---------- Speech ----------
 // Phoneme-driven mouth shapes live in lipsync.js; this file reaches them through window.LIPSYNC
@@ -392,6 +392,9 @@ fireCv.addEventListener('webglcontextrestored', () => { try { initGL(); } catch 
 const hearthImg = new Image(); hearthImg.src = HEARTH.src;
 // Things hanging in the room, each its own layer cut from the painting (assets/sway.js)
 const swayers = (window.SWAY || []).map((s) => ({ ...s, ang: 0, vel: 0, img: Object.assign(new Image(), { src: s.src }) }));
+// The allowance props, drawn flat on the stone: no hook, no sway, no physics. (Not `props` —
+// that name already belongs to the glass's own state for this window.)
+const sceneProps = (window.PROPS || []).map((p) => ({ ...p, img: Object.assign(new Image(), { src: p.src }) }));
 
 // ---------- Wind ----------
 // Now and then a soft gust drifts through: it builds over a couple of seconds, holds, and dies
@@ -619,8 +622,8 @@ function onCue(name) {
 // Little actions: each shapes the pose over its duration (p: 0..1) and may drive the mouth.
 const ACTIONS = {
   yawn:    { dur: 2.0, run(p, pose) { const e = Math.pow(pos(Math.sin(Math.PI * p)), 1.5); pose.lid = Math.max(pose.lid, 0.6 * e); pose.smileEyes = 0; pose.size += 0.06 * e; return { open: 0.85 * e, wide: 0.15 }; } },
-  sigh:    { dur: 1.6, run(p, pose) { const e = Math.sin(Math.PI * p); pose.size -= 0.16 * e; pose.py += 0.3 * e; pose.sway *= 1 - 0.4 * e; return { open: 0.16 * e, wide: 0.3 }; } },
-  hop:     { dur: 0.7, run(p) { return { dy: -Math.sin(Math.PI * p) * 0.18 }; } },
+  sigh:    { dur: 1.6, run(p, pose) { const e = Math.sin(Math.PI * p); pose.size -= 0.16 * e; pose.py += 0.3 * e; pose.sway *= 1 - 0.4 * e; pose.armLift = Math.min(pose.armLift, -0.3 * e); return { open: 0.16 * e, wide: 0.3 }; } },
+  hop:     { dur: 0.7, run(p, pose) { const e = Math.sin(Math.PI * p); pose.armLift = Math.max(pose.armLift, 0.75 * e); return { dy: -e * 0.18 }; } },
   shiver:  { dur: 1.1, run(p, pose) { pose.tremble = Math.max(pose.tremble, 1.2 * (1 - p)); } },
   hum:     { dur: 2.6, run(p, pose, t) { pose.lid = Math.max(pose.lid, 0.45); pose.smileEyes = Math.max(pose.smileEyes, 0.3); pose.lean += 0.05 * Math.sin(p * Math.PI * 6); return { open: 0.05 + 0.06 * (0.5 + 0.5 * Math.sin(p * Math.PI * 8)), wide: 0.45 }; } },
   // Ducks until his mouth sits on the log's top edge (mouth = log top + 0.142 R0 - 0.38 R + dy R0,
@@ -632,7 +635,7 @@ const ACTIONS = {
     return { open: p > 0.12 && p < 0.8 ? pos(Math.sin((p - 0.12) * Math.PI * 9)) * 0.5 : 0, wide: 0.6,
       dy: ease * pos(0.38 * fin(rig.size, 1) - 0.16) };
   } },
-  stretch: { dur: 1.8, run(p, pose) { const e = Math.sin(Math.PI * p); pose.size += 0.25 * e; pose.lid = Math.max(pose.lid, 0.3 * e); return { open: 0.1 * e, wide: 0.3 }; } },
+  stretch: { dur: 1.8, run(p, pose) { const e = Math.sin(Math.PI * p); pose.size += 0.25 * e; pose.lid = Math.max(pose.lid, 0.3 * e); pose.armLift = Math.max(pose.armLift, 0.9 * e); pose.hug = Math.min(pose.hug, 1 - 0.7 * e); return { open: 0.1 * e, wide: 0.3 }; } },
   snore:   { dur: 3.2, run(p, pose) { const e = 0.5 - 0.5 * Math.cos(p * Math.PI * 2); pose.size += 0.05 * e; return { open: 0.1 * e, wide: 0.2 }; } },
 };
 // Gaze modes override where the pupils point
@@ -667,7 +670,7 @@ const POSE_LIMITS = {
   size: [0.35, 2.0], lean: [-0.6, 0.6], sway: [0, 3], eye: [0.4, 2.2], tall: [0.4, 2.2],
   lid: [0, 1], tilt: [-1.2, 1.2], smileEyes: [0, 1], pupil: [0.15, 2.2], px: [-1.6, 1.6],
   py: [-2.2, 2.2], open: [0, 1.2], wide: [0, 1.5], curve: [-1.2, 1.2], teeth: [0, 1],
-  embers: [0, 2], tremble: [0, 2], hug: [0, 1.6],
+  embers: [0, 2], tremble: [0, 2], hug: [0, 1.6], armLift: [-0.4, 1],
 };
 function sanitizePose(pose) {
   for (const key of EASED) {
@@ -714,6 +717,11 @@ function drawHearth(W, H, S, lx, ly, glow) {
   c.clearRect(0, 0, W, H);
   if (settings.hearth === false || !hearthImg.complete || !hearthImg.naturalWidth) return;
   c.drawImage(hearthImg, S.dx, S.dy, S.iw, S.ih);
+  // Straight after the painting and before anything that hangs, because they stand on its floor.
+  for (const p of sceneProps) {
+    if (!p.img.complete || !p.img.naturalWidth) continue;
+    c.drawImage(p.img, S.dx + p.x * S.iw, S.dy + p.y * S.ih, p.w * S.iw, p.h * S.ih);
+  }
   // The hanging things, each turned about its hook by the wind
   for (const s of swayers) {
     if (!s.img.complete || !s.img.naturalWidth) continue;
@@ -846,12 +854,29 @@ function drawArms(cx, logTop, logH, R, t, talking, lift = 0, faceX = cx, faceY =
   const c = fg;
   for (const side of [-1, 1]) {
     const pat = talking ? Math.max(0, Math.sin(t * 7 + (side > 0 ? 0 : 1.6))) * 0.04 : 0;
-    const reach = lerp(0.56, 0.36, rig.hug);                 // tighter hug -> hands closer together
+    // `hug` has always decided how far apart his hands sit. `armLift` is the axis that was missing:
+    // above zero he brings them up off the log and out, below zero they slide down its face and
+    // droop. Everything else about the arm — the bow of the elbow, the taper, the round paw — is
+    // unchanged, so a raised arm is the same arm in a different place rather than a new drawing.
+    const up = clamp(fin(rig.armLift, 0), -0.4, 1);
+    const open01 = Math.max(0, up);
+    // Raised arms swing outward, but only as far as the hug allows: angry throws them wide, while
+    // scared keeps them pulled in at his chest even though both are raised. Without the hug term,
+    // angry's hands ended up tucked against his own silhouette where you could barely see them.
+    const reach = lerp(0.56, 0.36, rig.hug) + 0.45 * open01 * (1 - rig.hug * 0.8);
     // Shoulder, low on his side behind the log; it rides along when he bounces, the paws keep
     // their grip. Short and stubby, like the little arms in the reference drawings.
     const sx = cx + side * R * 0.6, sy = logTop - R * 0.08 + lift;
-    const hx = cx + side * R * reach, hy = logTop + logH * (0.22 - pat);
-    const kx = cx + side * R * 0.7, ky = logTop + logH * 0.04;  // the bend: a gentle bow, not a hook
+    const restHy = logTop + logH * (0.22 - pat);
+    // A little lift puts his hands at face level; a lot puts them above his head, which is where
+    // they have to be for anger to read as anger rather than as folded arms.
+    const upHy = lerp(faceY + R * 0.12, faceY - R * 0.4, open01);
+    const hx = cx + side * R * reach;
+    const hy = up >= 0 ? lerp(restHy, upHy, open01) : restHy + logH * 0.1 * -up;
+    // The elbow follows the hand, or the bow turns inside out on the way up.
+    const kyRest = logTop + logH * 0.04;
+    const kx = cx + side * R * (0.7 + 0.22 * open01);
+    const ky = up >= 0 ? lerp(kyRest, sy + (upHy - sy) * 0.45, open01) : kyRest + logH * 0.05 * -up;
     // A tapered lobe of his own flame: wide where it leaves his body, narrowing to a round paw.
     // Thickness only. Their vertical reach is anchored to the log (hy/ky below) so the paws grip
     // its front face, and slimming is the one way to make them read lighter against a smaller body
