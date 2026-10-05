@@ -25,9 +25,11 @@ const NAMED = {
 // ---------- The ember palette ----------
 // Claude Code paints with the default colors and the 256-color palette (no truecolor reaches the
 // pane), so every color it uses is a palette slot, and all 256 can be repainted here without
-// touching tmux. Each standard color keeps some of its hue (a diff still reads red and green) but
-// is pulled toward a ramp from deep coal to white heat by its lightness.
-const RAMP = [[0, [26, 10, 4]], [0.35, [122, 58, 24]], [0.6, [217, 130, 74]], [0.8, [247, 196, 138]], [1, [255, 244, 224]]];
+// touching tmux. Everything burns: grays follow a ramp from coal through red and orange to
+// yellow-white heat by their lightness, and every hue is folded onto the fire's own (red stays
+// red, green turns gold, blue and cyan turn orange, magenta crimson), so a diff still reads as two
+// different colors without anything leaving the flame.
+const RAMP = [[0, [44, 6, 0]], [0.3, [160, 28, 6]], [0.5, [238, 86, 18]], [0.7, [255, 152, 36]], [0.86, [255, 212, 92]], [1, [255, 246, 206]]];
 function ramp(l) {
   for (let i = 1; i < RAMP.length; i++) {
     const [b, cb] = RAMP[i], [a, ca] = RAMP[i - 1];
@@ -43,24 +45,38 @@ function xterm256(i) {
   if (i < 232) { const n = i - 16, v = (k) => (k ? 55 + k * 40 : 0); return [v(Math.floor(n / 36)), v(Math.floor(n / 6) % 6), v(n % 6)]; }
   const g = 8 + (i - 232) * 10; return [g, g, g];
 }
+// A hue (degrees) folded onto the fire's: red 0 → 2, yellow 60 → 46, green 120 → 52 (gold),
+// cyan 180 → 34, blue 240 → 22 (orange), magenta 300 → 348 (crimson).
+function fireHue(h) {
+  const STOPS = [[0, 2], [60, 46], [120, 52], [180, 34], [240, 22], [300, -12], [360, 2]];
+  for (let i = 1; i < STOPS.length; i++) {
+    const [b, fb] = STOPS[i], [a, fa] = STOPS[i - 1];
+    if (h <= b) return (fa + (fb - fa) * (h - a) / (b - a) + 360) % 360;
+  }
+  return 2;
+}
+function hsl(h, s, l) {
+  const k = (n) => (n + h / 30) % 12, a = s * Math.min(l, 1 - l);
+  return [0, 8, 4].map((n) => 255 * (l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1))));
+}
 function warm(rgb) {
-  const [r, g, b] = rgb, l = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-  const sat = (Math.max(r, g, b) - Math.min(r, g, b)) / 255;
-  // Grays become pure ember; colors keep up to half their own hue, more the more saturated.
-  const keep = Math.min(0.55, sat * 0.8);
-  // Text sits on a dark core, so nothing is allowed to sink below a readable glow.
-  const e = ramp(0.28 + l * 0.72);
-  return e.map((v, j) => v * (1 - keep) + rgb[j] * keep);
+  const [r, g, b] = rgb.map((v) => v / 255), max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b, sat = max - min;
+  // Text sits on a dark core, so nothing sinks below a readable glow.
+  if (sat < 0.12) return ramp(0.26 + lum * 0.74);
+  const h = max === r ? 60 * (((g - b) / sat + 6) % 6) : max === g ? 60 * ((b - r) / sat + 2) : 60 * ((r - g) / sat + 4);
+  // Lightness kept roughly as it was: dark slots are diff and box backgrounds, and must stay dark.
+  return hsl(fireHue(h), 0.95, Math.min(0.68, 0.06 + (max + min) / 2 * 0.85));
 }
 const PALETTE = Array.from({ length: 256 }, (_, i) => hex(warm(xterm256(i))));
 // Hand-picked for the slots Claude Code leans on: its accent salmon, the input box's fill, its
 // diff greens and reds, and the dim grays of hints and tool output.
-Object.assign(PALETTE, { 174: '#ff9a52', 237: '#3a1a0c', 236: '#2e1408', 114: '#b8d870', 210: '#ff7a5a', 246: '#c79a6e', 244: '#a97f58', 231: '#fff1d6' });
+Object.assign(PALETTE, { 174: '#ff6a24', 237: '#3c0e04', 236: '#300a03', 114: '#ffe04a', 210: '#ff4a36', 246: '#f08a34', 244: '#d0682a', 231: '#fff2c4' });
 const THEME = {
-  background: 'rgba(0,0,0,0)', foreground: '#ffdcae', cursor: '#ffb347', cursorAccent: '#1a0a04',
-  selectionBackground: 'rgba(255, 170, 80, 0.32)',
-  scrollbarSliderBackground: 'rgba(255, 140, 60, 0.22)', scrollbarSliderHoverBackground: 'rgba(255, 140, 60, 0.38)',
-  scrollbarSliderActiveBackground: 'rgba(255, 160, 80, 0.5)',
+  background: 'rgba(0,0,0,0)', foreground: '#ffcf6a', cursor: '#ffe04a', cursorAccent: '#2c0600',
+  selectionBackground: 'rgba(255, 120, 30, 0.35)',
+  scrollbarSliderBackground: 'rgba(255, 120, 40, 0.4)', scrollbarSliderHoverBackground: 'rgba(255, 150, 60, 0.6)',
+  scrollbarSliderActiveBackground: 'rgba(255, 180, 70, 0.7)',
   black: PALETTE[0], red: PALETTE[1], green: PALETTE[2], yellow: PALETTE[3], blue: PALETTE[4], magenta: PALETTE[5], cyan: PALETTE[6], white: PALETTE[7],
   brightBlack: PALETTE[8], brightRed: PALETTE[9], brightGreen: PALETTE[10], brightYellow: PALETTE[11], brightBlue: PALETTE[12], brightMagenta: PALETTE[13], brightCyan: PALETTE[14], brightWhite: PALETTE[15],
   extendedAnsi: PALETTE.slice(16),

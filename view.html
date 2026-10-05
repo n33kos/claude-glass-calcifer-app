@@ -15,12 +15,17 @@
   #status { position: fixed; left: 10px; top: 8px; right: 10px; font: 12px/1.3 var(--font-sans, system-ui);
     color: #ffcf9e; text-shadow: 0 1px 2px #000; pointer-events: none; }
   /* His insides: the live terminal, in the dark heart of his flame (terminal.js). --z is how far
-     he has opened up, 0..1, set every frame. */
-  #core { position: fixed; left: 50%; top: 16vh; width: min(84vw, 1280px); height: 66vh; box-sizing: border-box;
+     he has opened up, 0..1, set every frame. Its width is set from the frame too, leaving a
+     margin either side for his eyes; this is only the first frame's. */
+  #core { position: fixed; left: 50%; top: 16vh; width: min(80vw, 1100px); height: 66vh; box-sizing: border-box;
     transform: translateX(-50%) scale(calc(.9 + .1 * var(--z, 0))); opacity: var(--z, 0); visibility: hidden;
     display: flex; flex-direction: column; padding: 18px 22px 10px; border-radius: 28px;
-    background: radial-gradient(ellipse 75% 70% at 50% 48%, rgba(24, 7, 2, .9) 0%, rgba(30, 9, 2, .84) 60%, rgba(40, 12, 3, .6) 100%);
-    box-shadow: inset 0 0 40px 6px rgba(255, 120, 30, .22), 0 0 60px 20px rgba(20, 5, 0, .45); }
+    /* See-through enough that his flame moves behind the text. No backdrop blur: over an animated
+       canvas that is a full re-blur every frame. */
+    background: radial-gradient(ellipse 75% 70% at 50% 48%, rgba(30, 4, 0, .72) 0%, rgba(40, 6, 0, .6) 60%, rgba(60, 10, 0, .32) 100%);
+    box-shadow: inset 0 0 50px 8px rgba(255, 80, 10, .28), 0 0 60px 20px rgba(40, 4, 0, .35); }
+  /* The text burns: one small glow (it only repaints when a snapshot changes a row) */
+  #coreTerm .xterm-rows { text-shadow: 0 0 4px rgba(255, 70, 0, .55); }
   #core.on { visibility: visible; }
   #coreTerm { flex: 1 1 auto; min-height: 0; }
   /* xterm paints its viewport black and keeps a native scrollbar behind its own: both go, so the
@@ -28,6 +33,12 @@
   #coreTerm .xterm, #coreTerm .xterm-screen, #coreTerm .xterm-viewport { background: transparent !important; }
   #coreTerm .xterm-viewport { scrollbar-width: none; }
   #coreTerm .xterm-viewport::-webkit-scrollbar { display: none; }
+  /* ...and that slider stays put: xterm fades it out unless you're hovering or scrolling, which in
+     his core read as no scrollbar at all */
+  #coreTerm .xterm-scrollable-element > .scrollbar.vertical,
+  #coreTerm .xterm-scrollable-element > .scrollbar.vertical.invisible { opacity: 1 !important; }
+  #coreTerm .xterm-scrollable-element > .scrollbar.vertical > .slider { background: rgba(255, 150, 70, .42) !important; border-radius: 5px; }
+  #coreTerm .xterm-scrollable-element > .scrollbar.vertical > .slider:hover { background: rgba(255, 170, 90, .65) !important; }
   #coreMsg { position: absolute; inset: 0; display: none; place-content: center; text-align: center; padding: 0 12%;
     font: 14px/1.5 var(--font-sans, system-ui); color: #ffdcae; }
   #coreMsg.on { display: grid; }
@@ -38,6 +49,11 @@
     color: #ffdcae; background: rgba(255, 140, 60, .12); box-shadow: inset 0 0 0 1px rgba(255, 160, 80, .25); }
   #coreBar button:hover { background: rgba(255, 140, 60, .28); color: #fff1d6; }
   #coreBar .gap { width: 14px; }
+  /* Close: a coal on the panel's top-left corner, half off it so it never sits on the text */
+  #coreClose { all: unset; position: absolute; left: -11px; top: -11px; width: 26px; height: 26px; border-radius: 50%;
+    display: grid; place-items: center; cursor: pointer; font: 13px/1 var(--font-sans, system-ui); color: #fff2c4;
+    background: radial-gradient(circle at 40% 35%, #c2410c, #5a1003); box-shadow: 0 0 10px rgba(255, 90, 10, .55), inset 0 0 0 1px rgba(255, 170, 80, .45); }
+  #coreClose:hover { background: radial-gradient(circle at 40% 35%, #f05a14, #7a1804); color: #fff; }
 </style>
 </head>
 <body>
@@ -53,11 +69,11 @@
     <button data-key="Up" title="Up arrow">↑</button><button data-key="Down" title="Down arrow">↓</button>
     <span class="gap"></span>
     <button data-act="refit" title="Resize the real tmux pane to fit his core">Fit pane</button>
-    <button data-act="close" title="Close (or click outside the terminal)">✕</button>
   </div>
+  <button id="coreClose" title="Close (or click outside the terminal)">✕</button>
 </div>
 <script src="glass-app://sdk/glass-app.js"></script>
-<script src="terminal.js?v=2"></script><!-- bump ?v= when the terminal changes -->
+<script src="terminal.js?v=3"></script><!-- bump ?v= when the terminal changes -->
 <script src="persona/calcifer.js?v=7"></script><!-- bump ?v= when the persona changes -->
 <script src="lipsync.js?v=1"></script><!-- bump ?v= when lip sync changes -->
 <script src="ears.js?v=25"></script><!-- bump ?v= when the ears change -->
@@ -1161,8 +1177,8 @@ document.getElementById('coreBar').addEventListener('click', (e) => {
   if (b.dataset.key) window.HEARTH_TERM.key(b.dataset.key);
   if (b.dataset.lit === 'backtab') window.HEARTH_TERM.literal('\x1b[Z');
   if (b.dataset.act === 'refit') window.HEARTH_TERM.refit();
-  if (b.dataset.act === 'close') setCore(false);
 });
+document.getElementById('coreClose').addEventListener('click', () => setCore(false));
 addEventListener('resize', () => window.HEARTH_TERM.fitLocal());
 const coreFont = () => `${(getComputedStyle(document.body).getPropertyValue('--font-mono') || '').trim() || 'ui-monospace'}, Menlo, monospace`;
 // Each frame: the panel follows `mix`, and the terminal opens once the panel is actually laid out
@@ -1177,8 +1193,10 @@ function tickCore(dt) {
   core.mix += (target - core.mix) * (1 - Math.pow(core.want ? 0.04 : 0.008, dt));
   if (Math.abs(target - core.mix) < 0.002) core.mix = target;
   const z = core.mix, shown = z > 0.02;
-  coreEl.classList.toggle('on', shown);
-  coreEl.style.setProperty('--z', String(Math.max(0, (z - 0.45) / 0.55)));
+  // Touch the DOM only when something changed: at rest (open or closed) this costs nothing a frame.
+  if (core.shown !== shown) { core.shown = shown; coreEl.classList.toggle('on', shown); }
+  const zs = Math.max(0, (z - 0.45) / 0.55).toFixed(3);
+  if (core.zs !== zs) { core.zs = zs; coreEl.style.setProperty('--z', zs); }
   if (core.want && !core.opened && z > 0.7 && coreTerm.clientWidth > 0) {
     core.opened = true;
     const token = (settings.terminalToken || '').trim();
@@ -1538,15 +1556,19 @@ function drawFrame(now) {
   const Fseat = R0 * Math.pow(size, 0.55);
   const faceX = cxSeat + rig.lean * Rseat * 0.3, eyeYSeat = cySeat - Rseat * 0.06, mouthYSeat = cySeat + Rseat * 0.24;
   // Opened up, he's seen up close, so his face is bigger, and it parts round the terminal: an eye
-  // either side of it near the top (each a little behind its edge), the mouth below it. The panel's
-  // box is #core's CSS (84vw up to 1280px wide, 16vh to 82vh).
-  const pw = Math.min(W * 0.84, 1280), pLeft = (W - pw) / 2, pTop = H * 0.16, pBottom = H * 0.82;
+  // in a margin either side of it, the mouth below it. The margins are sized to his eyes (with
+  // room for a wide-eyed mood), so however narrow the glass gets the terminal never covers them;
+  // on a wide glass the terminal stops at 1100px and the margins just grow.
+  const FEopen = Math.min(H * 0.3, W * 0.24);
+  const margin = Math.round(FEopen * 0.16 * 1.3 * 2 + 28);
+  const pw = Math.max(200, Math.min(W - margin * 2, 1100)), pLeft = (W - pw) / 2, pTop = H * 0.16, pBottom = H * 0.82;
+  if (core.width !== pw) { core.width = pw; coreEl.style.width = pw + 'px'; window.HEARTH_TERM.fitLocal(); }
   const F = lerp(Fseat, Math.min(H * 0.26, W * 0.2), ez);          // the mouth
-  const FE = lerp(Fseat, Math.min(H * 0.3, W * 0.24), ez);          // the eyes, a touch bigger still
-  const gap = Fseat * 0.4, erx = FE * 0.16 * rig.eye;
-  const eyeLX = lerp(faceX - gap, Math.max(pLeft - erx * 0.15, erx * 1.3), ez);
-  const eyeRX = lerp(faceX + gap, Math.min(W - pLeft + erx * 0.15, W - erx * 1.3), ez);
-  const eyeY = lerp(eyeYSeat, pTop + H * 0.08, ez);
+  const FE = lerp(Fseat, FEopen, ez);                                // the eyes, a touch bigger still
+  const gap = Fseat * 0.4;
+  const eyeLX = lerp(faceX - gap, pLeft - margin / 2, ez);
+  const eyeRX = lerp(faceX + gap, W - pLeft + margin / 2, ez);
+  const eyeY = lerp(eyeYSeat, pTop + H * 0.13, ez);
   const mouthX = lerp(faceX, W / 2, ez), mouthY = lerp(mouthYSeat, (pBottom + H) / 2, ez);
   // The face is painted opaque on a small offscreen canvas around it, then laid onto the front
   // layer at FACE_ALPHA, so overlapping strokes don't double up (and no extra full-window layer).
