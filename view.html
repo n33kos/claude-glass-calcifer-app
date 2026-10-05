@@ -27,7 +27,7 @@
 <script src="sounds.js?v=4"></script><!-- bump ?v= when the sounds change -->
 <script src="vendor/ort/ort.wasm.min.js"></script><!-- ONNX Runtime Web, wasm only (vendored, 1.30.0) -->
 <script src="wake/spotter.js?v=5"></script><!-- hears his name locally; bump ?v= when it changes -->
-<script src="assets/sway.js?v=16"></script><!-- bump ?v= when the scene's images change -->
+<script src="assets/sway.js?v=17"></script><!-- bump ?v= when the scene's images change -->
 
 <script>
 /*
@@ -394,7 +394,35 @@ const hearthImg = new Image(); hearthImg.src = HEARTH.src;
 const swayers = (window.SWAY || []).map((s) => ({ ...s, ang: 0, vel: 0, img: Object.assign(new Image(), { src: s.src }) }));
 // The allowance props, drawn flat on the stone: no hook, no sway, no physics. (Not `props` —
 // that name already belongs to the glass's own state for this window.)
-const sceneProps = (window.PROPS || []).map((p) => ({ ...p, img: Object.assign(new Image(), { src: p.src }) }));
+//
+// A prop is either a single image or a set of levels keyed 0..100 in tens, one per tenth of the
+// window it stands for. Every level is loaded up front: they are small, and swapping to one that
+// has not decoded yet would blink a gap into the hearth.
+const sceneProps = (window.PROPS || []).map((p) => {
+  const imgs = {};
+  for (const [k, src] of Object.entries(p.levels || {})) imgs[Number(k)] = Object.assign(new Image(), { src });
+  return { ...p, imgs, img: p.src ? Object.assign(new Image(), { src: p.src }) : null };
+});
+// Which window each prop stands for. `kindling` burns down over the five-hour window, the fast one
+// you watch during a sitting; the pile is the week. Unmapped props just always draw.
+const PROP_LIMIT = { kindling: 'session', logs: 'week' };
+// What is LEFT, 0..1 — the limits report what has been used.
+function propLevel(p) {
+  const lim = props?.state?.usage?.[PROP_LIMIT[p.id]];
+  if (!lim || typeof lim.percent !== 'number') return 1;
+  return Math.max(0, Math.min(1, 1 - lim.percent / 100));
+}
+function propImage(p) {
+  if (!p.levels) return p.img;
+  const want = Math.round(propLevel(p) * 10) * 10;
+  const have = Object.keys(p.imgs).map(Number).sort((a, b) => a - b);
+  // Nearest level that has actually decoded, so a slow load shows a neighbour rather than nothing.
+  let best = null;
+  for (const l of have) if (p.imgs[l].complete && p.imgs[l].naturalWidth) {
+    if (best === null || Math.abs(l - want) < Math.abs(best - want)) best = l;
+  }
+  return best === null ? null : p.imgs[best];
+}
 
 // ---------- Wind ----------
 // Now and then a soft gust drifts through: it builds over a couple of seconds, holds, and dies
@@ -719,8 +747,9 @@ function drawHearth(W, H, S, lx, ly, glow) {
   c.drawImage(hearthImg, S.dx, S.dy, S.iw, S.ih);
   // Straight after the painting and before anything that hangs, because they stand on its floor.
   for (const p of sceneProps) {
-    if (!p.img.complete || !p.img.naturalWidth) continue;
-    c.drawImage(p.img, S.dx + p.x * S.iw, S.dy + p.y * S.ih, p.w * S.iw, p.h * S.ih);
+    const img = propImage(p);
+    if (!img || !img.complete || !img.naturalWidth) continue;
+    c.drawImage(img, S.dx + p.x * S.iw, S.dy + p.y * S.ih, p.w * S.iw, p.h * S.ih);
   }
   // The hanging things, each turned about its hook by the wind
   for (const s of swayers) {
