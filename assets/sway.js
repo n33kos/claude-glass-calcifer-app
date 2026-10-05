@@ -1,15 +1,18 @@
 // The scene's images: the painting without its hanging things, the log he hugs (and where it sits),
 // and the hanging things that sway, each with the hook it hangs from. Positions are fractions of
 // the painting. Each path carries ?v=<content hash> so an open glass never shows a stale copy.
-window.HEARTH_SRC = 'assets/hearth-bare.jpg?v=740b39df';
+// The pot that stood at the bottom left is painted out of this copy, because the kindling pot
+// prop stands in its place and the old one showed underneath it. assets/hearth-bare.jpg is
+// kept untouched beside it as the original.
+window.HEARTH_SRC = 'assets/hearth-bare-nopot.jpg?v=634fe272';
 window.LOG_SRC = 'assets/log.png?v=d9e922d9';
 window.LOG_RECT = {"x": 0.3659018987341772, "y": 0.6898584905660378, "w": 0.26700949367088606, "h": 0.20047169811320756};
 // Props that show how much of the plan's allowance is left. Not hung and not swaying — they sit
 // on the stone. Each was painted INTO this very picture by handing the model the bare hearth, then
 // cut back out, so the perspective, palette and light are the scene's own rather than a prop's.
 window.PROPS = [
- { "id": "logs",     "src": "assets/props-logs.png?v=01d13638",     "x": 0.653879, "y": 0.712851, "w": 0.247231, "h": 0.223467 },
- { "id": "kindling", "src": "assets/props-kindling.png?v=98113bab", "x": 0.137263, "y": 0.623231, "w": 0.172864, "h": 0.343750 }
+ { "id": "logs", "src": "assets/props-logs.png?v=cd0de3a5", "x": 0.618671, "y": 0.645047, "w": 0.332278, "h": 0.353774 },
+ { "id": "kindling", "src": "assets/props-kindling.png?v=363d6738", "x": 0.110759, "y": 0.566038, "w": 0.229430, "h": 0.424528 }
 ];
 window.SWAY = [
  {
