@@ -141,7 +141,7 @@ Claude Code are untouched).
 - The buttons under it send ^C, Esc, Tab, Shift-Tab (Claude's mode switch), ↑ and ↓.
 - **Fit pane** resizes the real tmux window to his core. It only happens when you ask, because it
   also changes the size for any terminal attached to that session.
-- Click anywhere outside the terminal, or the ✕ on its top-left corner, to close it. Asking Claude to "show me the terminal" works too:
+- Click anywhere outside the terminal, or the ✕ in its top-left corner, to close it. Asking Claude to "show me the terminal" works too:
   `claude-glass app calcifer terminal --on true|false`.
 
 Typing into your shell is more than speaking, so it takes its own token with the `control` scope:
