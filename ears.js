@@ -92,8 +92,8 @@ function voiceCommand(rest) {
 // No stream is held here. This only names a device, so the room can be told which one to use.
 const ear = { choice: null, deviceId: '', label: '', note: '', err: '' };
 // Which mic: the setting's name (or any part of it, "AirPods"), else the most reasonable one: the
-// system default unless that's a loopback or virtual device (his own "Calcifer System Audio",
-// BlackHole...), then the built-in mic, then any real one.
+// system default unless that's a loopback or virtual device (BlackHole, Loopback...), then the
+// built-in mic, then any real one.
 const VIRTUAL = /system audio|blackhole|loopback|aggregate|soundflower|virtual|background music|zoomaudio|teams audio/i;
 navigator.mediaDevices?.addEventListener?.('devicechange', () => { ear.deviceId = ''; });
 async function pickMic(want) {

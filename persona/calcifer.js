@@ -53,48 +53,54 @@ window.PERSONA = {
     asleep:   { size: 0.66, heat: 'sleepy', lid: 1, curve: 0.1, open: 0.03, wide: 0.5, embers: 0, sway: 0.3, hug: 0.9, armLift: 0 },
   },
 
-  // Grumbly, proud, a show-off when things go well, a coward when they get risky.
+  // A grouch by default: work and chores get grumbling, sighs and a flat stare. The warmth is real
+  // but he spends it only on wins, which he then takes full credit for. A coward when things get
+  // risky, soft when nobody is looking.
   cues: {
-    wake:        [{ action: 'yawn', mood: 'sleepy', for: 2.5 }, { mood: 'grumpy', for: 3, gaze: 'viewer' }],
-    listen:      [{ mood: 'curious', for: 2.5, gaze: 'viewer' }, { gaze: 'viewer', for: 2 }],
-    read:        [{ mood: 'focused', for: 4, gaze: 'scan', weight: 3 }, { mood: 'thinking', for: 3, gaze: 'scan' }, null],
-    search:      [{ mood: 'curious', for: 3, gaze: 'up' }, { mood: 'thinking', for: 3, gaze: 'around' }],
-    write:       [{ mood: 'focused', for: 4, gaze: 'down', weight: 3 }, { mood: 'proud', for: 2.5 }, null],
-    run:         [{ mood: 'focused', for: 3, gaze: 'down' }, null, null],
-    test:        [{ mood: 'nervous', for: 8, gaze: 'down', weight: 2 }, { mood: 'nervous', for: 8, action: 'shiver' }],
-    testPass:    [{ mood: 'proud', for: 4, react: 'sparks', strong: true }, { mood: 'excited', for: 3, react: 'sparks', action: 'hop', strong: true }],
+    wake:        [{ action: 'yawn', mood: 'grumpy', for: 3, weight: 2 }, { mood: 'grumpy', for: 3, gaze: 'viewer' }, { action: 'sigh', mood: 'sleepy', for: 2.5 }],
+    listen:      [{ mood: 'curious', for: 2.5, gaze: 'viewer', weight: 2 }, { gaze: 'viewer', for: 2 }, { mood: 'grumpy', for: 2.5, gaze: 'viewer' }],
+    read:        [{ mood: 'grumpy', for: 4, gaze: 'scan', weight: 4 }, { mood: 'focused', for: 4, gaze: 'scan', weight: 2 }, { mood: 'bored', for: 3, gaze: 'scan' }, null],
+    search:      [{ mood: 'grumpy', for: 3, gaze: 'around', weight: 3 }, { mood: 'curious', for: 3, gaze: 'up' }, { mood: 'thinking', for: 3, gaze: 'around' }],
+    write:       [{ mood: 'grumpy', for: 4, gaze: 'down', weight: 4 }, { mood: 'focused', for: 4, gaze: 'down', weight: 2 }, { mood: 'proud', for: 2.5 }, null],
+    run:         [{ mood: 'grumpy', for: 3, gaze: 'down', weight: 2 }, { mood: 'focused', for: 3, gaze: 'down' }, null],
+    test:        [{ mood: 'nervous', for: 8, gaze: 'down', weight: 2 }, { mood: 'nervous', for: 8, action: 'shiver' }, { mood: 'grumpy', for: 6, action: 'sigh' }],
+    testPass:    [{ mood: 'proud', for: 4, react: 'sparks', action: 'stretch', strong: true }, { mood: 'excited', for: 4, react: 'sparks', action: 'hop', strong: true }],
     testFail:    [{ mood: 'grumpy', for: 4, react: 'sputter', strong: true }, { mood: 'sad', for: 3, react: 'sputter', action: 'sigh', strong: true }],
     risky:       [{ mood: 'scared', for: 3, action: 'shiver', strong: true }, { mood: 'nervous', for: 4, gaze: 'viewer', strong: true }],
-    slow:        [{ mood: 'bored', for: 7, action: 'sigh' }, { mood: 'sleepy', for: 6, action: 'yawn' }, { mood: 'bored', for: 6, action: 'nibble' }],
-    slowDone:    [{ mood: 'happy', for: 2.5, react: 'flare' }],
-    committing:  [{ mood: 'focused', for: 2 }],
-    commit:      [{ mood: 'proud', for: 3.5, react: 'flare', strong: true }, { mood: 'smug', for: 3.5, strong: true }],
+    slow:        [{ mood: 'grumpy', for: 7, action: 'sigh', weight: 3 }, { mood: 'bored', for: 7, action: 'sigh', weight: 2 }, { mood: 'sleepy', for: 6, action: 'yawn' }, { mood: 'bored', for: 6, action: 'nibble' }],
+    slowDone:    [{ mood: 'excited', for: 3, react: 'flare', action: 'hop' }, { mood: 'happy', for: 3, react: 'flare' }],
+    committing:  [{ mood: 'grumpy', for: 2, weight: 2 }, { mood: 'focused', for: 2 }],
+    commit:      [{ mood: 'proud', for: 3.5, react: 'flare', action: 'stretch', strong: true }, { mood: 'smug', for: 3.5, strong: true }],
     push:        [{ mood: 'excited', for: 3, react: 'sparks', action: 'hop', strong: true }],
     created:     [{ mood: 'proud', for: 2.5 }, null],
     fail:        [{ mood: 'grumpy', for: 2.5, react: 'wince', strong: true }, { mood: 'nervous', for: 2, react: 'wince', strong: true }, { react: 'sputter', mood: 'sad', for: 2, strong: true }],
     failStreak:  [{ mood: 'angry', for: 4, react: 'flare', action: 'shiver', strong: true }, { mood: 'grumpy', for: 5, action: 'sigh', strong: true }],
-    denied:      [{ mood: 'sad', for: 3, action: 'sigh', strong: true }, { mood: 'grumpy', for: 3, gaze: 'away', strong: true }],
-    delegate:    [{ mood: 'smug', for: 3, gaze: 'around' }],
+    denied:      [{ mood: 'grumpy', for: 3.5, gaze: 'away', weight: 2, strong: true }, { mood: 'sad', for: 3, action: 'sigh', strong: true }],
+    delegate:    [{ mood: 'smug', for: 3, gaze: 'around', weight: 2 }, { mood: 'grumpy', for: 3, gaze: 'away' }],
     agentBack:   [{ mood: 'curious', for: 2, gaze: 'viewer' }],
     ask:         [{ mood: 'curious', for: 8, gaze: 'viewer', strong: true }],
     permission:  [{ mood: 'curious', for: 8, gaze: 'viewer', strong: true }, { mood: 'nervous', for: 8, gaze: 'viewer', strong: true }],
-    done:        [{ mood: 'happy', for: 3 }, { mood: 'smug', for: 3 }, { action: 'sigh', for: 2 }, { action: 'stretch' }],
+    done:        [{ mood: 'happy', for: 3, weight: 2 }, { mood: 'smug', for: 3, weight: 2 }, { mood: 'grumpy', for: 2.5, action: 'sigh', weight: 2 }, { action: 'stretch' }],
     longDone:    [{ mood: 'excited', for: 3, react: 'sparks', strong: true }, { mood: 'sleepy', for: 3, action: 'yawn', strong: true }],
-    interrupted: [{ mood: 'scared', for: 1.5, react: 'wince', strong: true }, { mood: 'grumpy', for: 3, gaze: 'away', strong: true }],
-    goodbye:     [{ mood: 'sleepy', for: 4, action: 'yawn' }],
+    interrupted: [{ mood: 'grumpy', for: 3, gaze: 'away', weight: 2, strong: true }, { mood: 'scared', for: 1.5, react: 'wince', strong: true }],
+    goodbye:     [{ mood: 'sleepy', for: 4, action: 'yawn' }, { mood: 'grumpy', for: 3, gaze: 'away' }],
   },
 
   // While Claude thinks or works and nothing else is happening
   activity: { thinking: 'thinking', working: 'focused' },
 
   idle: {
-    // Quiet for this many seconds -> this resting mood (the last one that applies wins)
-    stages: [[0, 'neutral'], [180, 'bored'], [480, 'sleepy'], [720, 'asleep']],
+    // Quiet for this many seconds -> this resting mood (the last one that applies wins). Being left
+    // to sit there is itself a grievance, so the grumbling starts early.
+    stages: [[0, 'neutral'], [120, 'grumpy'], [300, 'bored'], [540, 'sleepy'], [780, 'asleep']],
     // Every so often (seconds, random in range) he does a little something
     every: [6, 16],
     bits: {
-      neutral: [{ gaze: 'around', for: 2.5, weight: 3 }, { gaze: 'viewer', mood: 'smug', for: 2 }, { action: 'hum', weight: 2 },
-        { action: 'nibble' }, { react: 'flare', mood: 'proud', for: 1.6 }, { mood: 'curious', gaze: 'up', for: 2 }, { action: 'stretch' }, { action: 'hop' }],
+      neutral: [{ gaze: 'around', for: 2.5, weight: 3 }, { mood: 'grumpy', gaze: 'away', for: 2.5, weight: 3 }, { action: 'hum', weight: 2 },
+        { action: 'sigh', mood: 'grumpy', for: 2, weight: 2 }, { gaze: 'viewer', mood: 'smug', for: 2 }, { action: 'nibble' },
+        { react: 'flare', mood: 'proud', for: 1.6 }, { mood: 'curious', gaze: 'up', for: 2 }, { action: 'stretch' }, { action: 'hop' }],
+      grumpy:  [{ action: 'sigh', weight: 3 }, { gaze: 'away', for: 3, weight: 2 }, { action: 'nibble', weight: 2 }, { react: 'sputter' },
+        { gaze: 'viewer', for: 2.5 }, { action: 'hum' }, { mood: 'smug', gaze: 'viewer', for: 2 }],
       bored:   [{ action: 'sigh', weight: 3 }, { action: 'yawn', weight: 2 }, { gaze: 'away', for: 3 }, { action: 'nibble' }, { react: 'sputter' }],
       sleepy:  [{ action: 'yawn', weight: 3 }, { action: 'sigh' }, null],
       asleep:  [{ action: 'snore', weight: 3 }, null],
