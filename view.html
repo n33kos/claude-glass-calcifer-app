@@ -74,7 +74,7 @@ const EASED = ['size', 'lean', 'sway', 'eye', 'tall', 'lid', 'tilt', 'smileEyes'
 // Both were approximations of what the feed measures exactly.
 
 // ---------- Speech feed: speech events + audio from a relay ----------
-// Any server that speaks the speech-feed protocol (README: "Speech feed") over a WebSocket at
+// Any server that speaks the speech-feed protocol (README: "The speech feed") over a WebSocket at
 // <url>/ws/client: speech_start / speech_chunk (word timings, optional phonemes) / speech_end
 // JSON, plus the audio as binary frames.  The vmux relay is one; it also serves the client
 // library this uses (<url>/sdk/vmux-client.js), so the two always match.  The audio is played
@@ -1103,7 +1103,20 @@ let sceneStep = -1;                 // the same steps for the hanging things
 // animation callbacks paused (after sleep, minimize, or being hidden) and not resumed. A watchdog
 // notices when frames stop and keeps him going on a timer until animation callbacks come back.
 let lastRafAt = performance.now(), rafPending = false;
-function schedule() { if (!rafPending) { rafPending = true; requestAnimationFrame((now) => { rafPending = false; lastRafAt = performance.now(); frame(now); }); } }
+// At most 30 frames a second: his flame steps at 12 a second anyway, and every frame is GPU work
+// the rest of the glass waits behind (at 60 it kept the GPU busy enough to stall scrolling).
+const FRAME_MS = 1000 / 30;
+let lastDrawAt = 0;
+function schedule() {
+  if (rafPending) return;
+  rafPending = true;
+  requestAnimationFrame((now) => {
+    rafPending = false; lastRafAt = performance.now();
+    if (now - lastDrawAt < FRAME_MS - 2) { schedule(); return; }
+    lastDrawAt = now;
+    frame(now);
+  });
+}
 setInterval(() => {
   // Callbacks stalled while he's visible: drive at ~30 fps. (Hidden: draw nothing, nobody can see.)
   if (!document.hidden && performance.now() - lastRafAt > 400) frame(performance.now());
@@ -1153,6 +1166,23 @@ function frame(now) {
     B.action = null;
   }
 }
+/** An ember: a bright core with a soft glow, drawn once per palette and reused for every ember. */
+let emberCache = { key: '', cv: null };
+function emberSprite() {
+  const key = rig.pal[1].concat(rig.pal[2]).map((v) => Math.round(v * 20)).join(',');
+  if (emberCache.key === key && emberCache.cv) return emberCache.cv;
+  const cv = emberCache.cv ?? document.createElement('canvas'), N = 32;
+  cv.width = cv.height = N;
+  const c = cv.getContext('2d');
+  c.clearRect(0, 0, N, N);
+  const g = c.createRadialGradient(N / 2, N / 2, 0, N / 2, N / 2, N / 2);
+  g.addColorStop(0, css(rig.pal[2], 1)); g.addColorStop(0.25, css(rig.pal[2], 0.95));
+  g.addColorStop(0.4, css(rig.pal[1], 0.55)); g.addColorStop(1, css(rig.pal[1], 0));
+  c.fillStyle = g; c.fillRect(0, 0, N, N);
+  emberCache = { key, cv };
+  return cv;
+}
+
 function drawFrame(now) {
   const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now;
   const t = now / 1000;
@@ -1423,10 +1453,12 @@ function drawFrame(now) {
     e.x += e.vx * dt + Math.sin(t * 3 + i) * 0.004; e.y += e.vy * dt; e.vy -= 0.25 * dt; e.life -= dt * 0.6;
     if (e.life <= 0 || embers.length > 180) { embers.splice(i, 1); continue; }
     const ex = cx + e.x * R, ey = cy - e.y * R;
-    fg.fillStyle = css(rig.pal[2], e.life); fg.shadowColor = css(rig.pal[1], e.life); fg.shadowBlur = 6;
-    fg.beginPath(); fg.arc(ex, ey, (e.big ? 2.6 : 1.5) * (0.5 + e.life * 0.5), 0, Math.PI * 2); fg.fill();
+    // One glow sprite, stamped: a shadowBlur per ember was a GPU blur pass each, every frame.
+    const r = (e.big ? 2.6 : 1.5) * (0.5 + e.life * 0.5), s = emberSprite(), d = (r + 6) * 2;
+    fg.globalAlpha = Math.max(0, Math.min(1, e.life));
+    fg.drawImage(s, ex - d / 2, ey - d / 2, d, d);
   }
-  fg.shadowBlur = 0;
+  fg.globalAlpha = 1;
   drawWisps(cx, cy, R, t, now);   // last, so what he's working on rises in front of his own embers
 }
 schedule();
