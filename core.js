@@ -240,15 +240,28 @@ exports.onEvent = (state, event, ctx) => {
         ...(r.resetsAt ? { resetsAt: String(r.resetsAt) } : {}),
       }));
       const pick = (kind) => limits.find((l) => l.kind === kind) ?? null;
-      return { ...state, usage: {
+      // A measure without limits says nothing about them: keep the last ones rather than letting
+      // the props spring back to full.
+      const prev = state.usage ?? {};
+      const fresh = limits.length > 0;
+      const usage = {
+        ...prev,
         at: Date.now(),
-        session: pick('five_hour'),      // the sitting
-        week: pick('seven_day'),         // the long haul
-        spend: pick('spend_limit'),      // only on a gateway
+        ...(fresh ? {
+          limitsAt: Date.now(),
+          session: pick('five_hour'),    // the sitting
+          week: pick('seven_day'),       // the long haul
+          spend: pick('spend_limit'),    // only on a gateway
+          limits,
+        } : {}),
         ...(event.context ? { context: { tokens: num(event.context.tokens), window: num(event.context.window), percent: num(event.context.percent) } } : {}),
         ...(event.cost ? { cost: { usd: num(event.cost.usd) } } : {}),
-        limits,
-      } };
+      };
+      const next = { ...state, usage };
+      // The limits are the account's, not this session's: share them with every glass, so a
+      // Calcifer whose own session sits idle still sees the woodpile burn down.
+      if (!fresh || !ctx?.store) return next;
+      return ctx.store(next, { allowance: { at: usage.limitsAt, session: usage.session, week: usage.week, spend: usage.spend } });
     }
     case 'agent.end':
       return withCue(state, 'agentBack');

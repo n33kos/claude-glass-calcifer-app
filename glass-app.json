@@ -20,7 +20,8 @@
     "health": { "scope": "global", "default": {} },
     "earStatus": { "scope": "global", "default": {} },
     "wakeStatus": { "scope": "global", "default": {} },
-    "feedToken": { "scope": "global", "default": "" }
+    "feedToken": { "scope": "global", "default": "" },
+    "allowance": { "scope": "global", "default": {} }
   },
   "settings": {
     "persona": { "type": "bool", "label": "Claude speaks as Calcifer", "default": true },

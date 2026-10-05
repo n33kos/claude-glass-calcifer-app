@@ -406,10 +406,19 @@ const sceneProps = (window.PROPS || []).map((p) => {
 // Which window each prop stands for. `kindling` burns down over the five-hour window, the fast one
 // you watch during a sitting; the pile is the week. Unmapped props just always draw.
 const PROP_LIMIT = { kindling: 'session', logs: 'week' };
-// What is LEFT, 0..1 — the limits report what has been used.
+// The newest reading of the limits: this session's own, or the one any glass last shared (they are
+// the account's, so another session's turn is just as true here).
+function latestLimits() {
+  const own = props?.state?.usage, shared = props?.stored?.allowance;
+  const ownAt = own?.limitsAt ?? (own?.session || own?.week ? own.at : 0) ?? 0;
+  return (shared?.at ?? 0) > ownAt ? shared : own;
+}
+// What is LEFT, 0..1 — the limits report what has been used. Once a window's reset time has
+// passed, it has refilled, whether or not anyone has measured since.
 function propLevel(p) {
-  const lim = props?.state?.usage?.[PROP_LIMIT[p.id]];
+  const lim = latestLimits()?.[PROP_LIMIT[p.id]];
   if (!lim || typeof lim.percent !== 'number') return 1;
+  if (lim.resetsAt && Date.parse(lim.resetsAt) <= Date.now()) return 1;
   return Math.max(0, Math.min(1, 1 - lim.percent / 100));
 }
 function propImage(p) {
