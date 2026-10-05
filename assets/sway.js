@@ -11,7 +11,18 @@ window.LOG_RECT = {"x": 0.3659018987341772, "y": 0.6898584905660378, "w": 0.2670
 // on the stone. Each was painted INTO this very picture by handing the model the bare hearth, then
 // cut back out, so the perspective, palette and light are the scene's own rather than a prop's.
 window.PROPS = [
- { "id": "logs", "src": "assets/props-logs.png?v=cd0de3a5", "x": 0.618671, "y": 0.645047, "w": 0.332278, "h": 0.353774 },
+ { "id": "logs",
+   "x": 0.674238, "y": 0.690264, "w": 0.269145, "h": 0.286557,
+   // Six hand-cut states in twenties: what is left of the week. Logs come off the right-hand end,
+   // so the pile's left edge and base never move and the composition does not drift as it empties.
+   "levels": {
+    "0": "assets/props/logs-0.png?v=88e80f61",
+    "20": "assets/props/logs-20.png?v=c011628a",
+    "40": "assets/props/logs-40.png?v=1a7a16c4",
+    "60": "assets/props/logs-60.png?v=e96e6cc8",
+    "80": "assets/props/logs-80.png?v=12af14fe",
+    "100": "assets/props/logs-100.png?v=3820c5f7"
+   } },
  { "id": "kindling",
    "x": 0.110759, "y": 0.566038, "w": 0.229430, "h": 0.424528,
    // Eleven hand-cut states, 0 to 100 in tens: what is left of the five-hour window. Hand-painted
