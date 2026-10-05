@@ -95,7 +95,7 @@ function loadXterm() {
   return loading;
 }
 
-const T = { term: null, fit: null, client: null, el: null, err: '', live: false, key: '' };
+const T = { term: null, fit: null, client: null, el: null, err: '', key: '' };
 
 function send(keys) {
   const c = T.client; if (!c) return;
@@ -109,7 +109,7 @@ function send(keys) {
   });
 }
 
-// One snapshot, drawn as the whole buffer. A snapshot is the pane plus 50 lines of its history, so
+// One snapshot, drawn as the whole buffer. A snapshot is the pane plus its recent history, so
 // it is taller than the screen: written from cursor-home (vmux's way) it scrolled, and every 150ms
 // pushed another copy of those lines into xterm's own scrollback. At the bottom that hid itself;
 // scrolled up even a line, you watched the copies stream past each other. So each snapshot now
@@ -155,9 +155,7 @@ async function open(el, { base, token, sessionId, fontFamily }) {
     if (m?.type === 'session_connected') client.startTerminalStream();
     if (m?.type === 'session_not_found') T.err = 'The relay has no session for this folder';
   });
-  client.on('open', () => { T.live = true; });
   client.on('close', ({ code } = {}) => {
-    T.live = false;
     if (code === 4001) T.err = 'The relay rejected the terminal token (revoked or expired?)';
   });
   client.start();
@@ -170,7 +168,7 @@ function close() {
   try { T.client?.stopTerminalStream(); } catch {}
   try { T.client?.stop(); } catch {}
   try { T.term?.dispose(); } catch {}
-  Object.assign(T, { term: null, fit: null, client: null, el: null, live: false, key: '' });
+  Object.assign(T, { term: null, fit: null, client: null, el: null, key: '' });
 }
 
 // Fit to the core, then ask tmux for the same size, a frame later once the layout has settled.
@@ -187,9 +185,9 @@ function refit() {
 function fitLocal() { try { T.fit?.fit(); } catch {} }
 
 window.HEARTH_TERM = {
-  open, close, refit, fitLocal, theme: THEME,
+  open, close, refit, fitLocal,
   key: (name) => { T.client?.sendTerminalSpecialKey(name); T.term?.focus(); },
   literal: (text) => { T.client?.sendTerminalKeys(text); T.term?.focus(); },
-  get err() { return T.err; }, get live() { return T.live; }, get isOpen() { return !!T.el; },
+  get err() { return T.err; },
 };
 })();
