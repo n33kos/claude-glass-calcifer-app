@@ -14,13 +14,50 @@
   #sub.on { opacity: 1; }
   #status { position: fixed; left: 10px; top: 8px; right: 10px; font: 12px/1.3 var(--font-sans, system-ui);
     color: #ffcf9e; text-shadow: 0 1px 2px #000; pointer-events: none; }
+  /* His insides: the live terminal, in the dark heart of his flame (terminal.js). --z is how far
+     he has opened up, 0..1, set every frame. */
+  #core { position: fixed; left: 50%; top: 16vh; width: min(88vw, 1280px); height: 66vh; box-sizing: border-box;
+    transform: translateX(-50%) scale(calc(.9 + .1 * var(--z, 0))); opacity: var(--z, 0); visibility: hidden;
+    display: flex; flex-direction: column; padding: 18px 22px 10px; border-radius: 28px;
+    background: radial-gradient(ellipse 75% 70% at 50% 48%, rgba(24, 7, 2, .9) 0%, rgba(30, 9, 2, .84) 60%, rgba(40, 12, 3, .6) 100%);
+    box-shadow: inset 0 0 40px 6px rgba(255, 120, 30, .22), 0 0 60px 20px rgba(20, 5, 0, .45); }
+  #core.on { visibility: visible; }
+  #coreTerm { flex: 1 1 auto; min-height: 0; }
+  /* xterm paints its viewport black and keeps a native scrollbar behind its own: both go, so the
+     core shows through and only xterm's (ember-tinted) slider remains */
+  #coreTerm .xterm, #coreTerm .xterm-screen, #coreTerm .xterm-viewport { background: transparent !important; }
+  #coreTerm .xterm-viewport { scrollbar-width: none; }
+  #coreTerm .xterm-viewport::-webkit-scrollbar { display: none; }
+  #coreMsg { position: absolute; inset: 0; display: none; place-content: center; text-align: center; padding: 0 12%;
+    font: 14px/1.5 var(--font-sans, system-ui); color: #ffdcae; }
+  #coreMsg.on { display: grid; }
+  #coreMsg code { font-family: var(--font-mono, ui-monospace, monospace); background: rgba(255, 140, 60, .14); padding: .1em .4em; border-radius: 4px; user-select: all; }
+  #coreBar { flex: none; display: flex; gap: 6px; justify-content: center; padding-top: 8px; opacity: .55; transition: opacity .2s; }
+  #core:hover #coreBar { opacity: 1; }
+  #coreBar button { all: unset; cursor: pointer; padding: 3px 9px; border-radius: 6px; font: 12px/1.4 var(--font-mono, ui-monospace, monospace);
+    color: #ffdcae; background: rgba(255, 140, 60, .12); box-shadow: inset 0 0 0 1px rgba(255, 160, 80, .25); }
+  #coreBar button:hover { background: rgba(255, 140, 60, .28); color: #fff1d6; }
+  #coreBar .gap { width: 14px; }
 </style>
 </head>
 <body>
 <canvas id="view"></canvas>
 <div id="sub"></div>
 <div id="status"></div>
+<div id="core">
+  <div id="coreTerm"></div>
+  <div id="coreMsg"></div>
+  <div id="coreBar">
+    <button data-key="C-c" title="Ctrl+C">^C</button><button data-key="Escape" title="Escape">Esc</button>
+    <button data-key="Tab" title="Tab">Tab</button><button data-lit="backtab" title="Shift+Tab (Claude's mode)">⇧Tab</button>
+    <button data-key="Up" title="Up arrow">↑</button><button data-key="Down" title="Down arrow">↓</button>
+    <span class="gap"></span>
+    <button data-act="refit" title="Resize the real tmux pane to fit his core">Fit pane</button>
+    <button data-act="close" title="Close (or double-click his flame)">✕</button>
+  </div>
+</div>
 <script src="glass-app://sdk/glass-app.js"></script>
+<script src="terminal.js?v=1"></script><!-- bump ?v= when the terminal changes -->
 <script src="persona/calcifer.js?v=7"></script><!-- bump ?v= when the persona changes -->
 <script src="lipsync.js?v=1"></script><!-- bump ?v= when lip sync changes -->
 <script src="ears.js?v=25"></script><!-- bump ?v= when the ears change -->
@@ -1071,10 +1108,12 @@ function drawAshes(S, ears, t, dt) {
     c.font = `600 ${size}px ${sans}`;
     c.fillStyle = '#ffe9c4';
     c.fillText(state, tx, y - r * 2.4 - (hint ? size * 1.25 : 0));
-  } else if (hit.hover === 'fire') {
+  } else if (hit.hover === 'fire' && core.mix < 0.05) {
     c.font = `500 13px ${getComputedStyle(document.body).getPropertyValue('--font-sans') || 'system-ui'}`;
     c.textAlign = 'center'; c.textBaseline = 'top'; c.shadowColor = '#000'; c.shadowBlur = 6; c.fillStyle = '#ffe9c4';
     c.fillText(stored.muted ? 'Muted · click to let him talk' : 'Click to mute him', hit.fire.x, hit.fire.y + hit.fire.r * 0.75);
+    c.fillStyle = 'rgba(255, 233, 196, 0.62)'; c.font = `500 11.5px ${getComputedStyle(document.body).getPropertyValue('--font-sans') || 'system-ui'}`;
+    c.fillText('Double-click to look inside', hit.fire.x, hit.fire.y + hit.fire.r * 0.75 + 17);
   }
   c.restore();
 }
@@ -1095,8 +1134,73 @@ addEventListener('click', (e) => {
   // Now it moves between the two resting states, and ends a conversation if one is running.
   // Talking to him without being called is the right button.
   if (what === 'ear') setPosture(mic === 'off' ? 'wake' : mic === 'wake' ? 'off' : 'wake');
-  if (what === 'fire') setMuted(!stored.muted);
+  // One click mutes him, two open him up. The mute waits out a double-click's window so opening
+  // him doesn't mute and unmute him on the way.
+  if (what === 'fire') {
+    clearTimeout(core.clickTimer);
+    if (e.detail >= 2) setCore(!core.want);
+    else if (!core.want) core.clickTimer = setTimeout(() => setMuted(!stored.muted), 260);
+  }
 });
+
+// ---------- His insides: the live terminal (terminal.js) ----------
+// Double-click him and he swells to fill the glass, his eyes drifting up to the side and his mouth
+// down to the bottom, and the tmux pane Claude runs in burns in his core: the real one, typed into
+// directly. `mix` eases 0..1 and drives his size, his face and the panel together.
+const core = { want: false, mix: 0, cmdSeq: null, clickTimer: 0, opened: false };
+const coreEl = document.getElementById('core'), coreTerm = document.getElementById('coreTerm'), coreMsg = document.getElementById('coreMsg');
+function setCore(on) {
+  if (core.want === on) return;
+  core.want = on;
+  if (!on) { window.HEARTH_TERM.close(); core.opened = false; }
+  react(on ? 'flare' : 'sputter');
+}
+// Clicks and keys inside the core are the terminal's, not his: they must not mute him.
+for (const ev of ['click', 'dblclick', 'pointerdown', 'contextmenu']) coreEl.addEventListener(ev, (e) => e.stopPropagation());
+coreEl.addEventListener('pointermove', (e) => { e.stopPropagation(); hit.hover = null; document.body.style.cursor = ''; });
+document.getElementById('coreBar').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.key) window.HEARTH_TERM.key(b.dataset.key);
+  if (b.dataset.lit === 'backtab') window.HEARTH_TERM.literal('\x1b[Z');
+  if (b.dataset.act === 'refit') window.HEARTH_TERM.refit();
+  if (b.dataset.act === 'close') setCore(false);
+});
+addEventListener('resize', () => window.HEARTH_TERM.fitLocal());
+const coreFont = () => `${(getComputedStyle(document.body).getPropertyValue('--font-mono') || '').trim() || 'ui-monospace'}, Menlo, monospace`;
+// Each frame: the panel follows `mix`, and the terminal opens once the panel is actually laid out
+// (xterm measuring a zero-size box is the blank-terminal bug vmux hit).
+function tickCore(dt) {
+  // Claude can open or close it too (`claude-glass app calcifer terminal --on ...`); a command from
+  // before this page loaded is not replayed.
+  const cmd = props?.state?.terminal;
+  if (cmd && core.cmdSeq !== null && cmd.seq !== core.cmdSeq) setCore(cmd.on === 'toggle' ? !core.want : !!cmd.on);
+  core.cmdSeq = cmd?.seq ?? 0;
+  const target = core.want ? 1 : 0;
+  core.mix += (target - core.mix) * (1 - Math.pow(core.want ? 0.04 : 0.008, dt));
+  if (Math.abs(target - core.mix) < 0.002) core.mix = target;
+  const z = core.mix, shown = z > 0.02;
+  coreEl.classList.toggle('on', shown);
+  coreEl.style.setProperty('--z', String(Math.max(0, (z - 0.45) / 0.55)));
+  if (core.want && !core.opened && z > 0.7 && coreTerm.clientWidth > 0) {
+    core.opened = true;
+    const token = (settings.terminalToken || '').trim();
+    window.HEARTH_TERM.open(coreTerm, { base: feedBase(), token, sessionId: feed.sessionId, fontFamily: coreFont() });
+  }
+  const err = core.want && core.opened ? window.HEARTH_TERM.err : '';
+  coreMsg.classList.toggle('on', !!err);
+  if (err && coreMsg.dataset.err !== err) {
+    coreMsg.dataset.err = err;
+    coreMsg.innerHTML = err === 'no-token'
+      ? 'Reaching in takes a <b>control</b> token (his voice token can only speak).<br><br>Run <code>vmux token Calcifer-terminal --scope control</code><br>and paste it into Settings → Calcifer → Terminal token.'
+      : '';
+    if (err !== 'no-token') coreMsg.textContent = err;
+  }
+  // Retry once the token or session turns up while he's open.
+  if (err && core.opened && (err === 'no-token' ? (settings.terminalToken || '').trim() : feed.sessionId) && performance.now() > (core.retryAt || 0)) {
+    core.retryAt = performance.now() + 3000; core.opened = false; window.HEARTH_TERM.close();
+  }
+  return z;
+}
 addEventListener('contextmenu', (e) => {
   if (hitAt(e) !== 'ear') return;
   e.preventDefault();
@@ -1362,6 +1466,9 @@ function drawFrame(now) {
     lookUntil = now + (around ? 350 + Math.random() * 500 : 1400 + Math.random() * 3200);
   }
   if (shown === 'asleep') open = 1; // no blinking in his sleep (the lids are already shut)
+  // Opened up, he reads along: his eyes, up at the side, look down at the terminal in his middle.
+  const z = tickCore(dt), ez = z * z * (3 - 2 * z);
+  if (ez > 0.5 && !gazeHeld) { lookX = -0.55; lookY = 0.5; }
 
   // Layout: he sits behind the log, centered on it
   const S = stage(W, H);
@@ -1374,10 +1481,15 @@ function drawFrame(now) {
   // Muting him silences the whole hearth, not just his voice: crackle, effects and all.
   window.SOUNDS?.tick({ on: settings.sounds !== false && !stored.muted, ambience: settings.ambience !== false, volume: (settings.soundVolume ?? 35) / 100,
     size, sway: rig.sway ?? 1, asleep: shown === 'asleep' });
-  const R = R0 * size;
+  const Rseat = R0 * size;
   const jit = (rig.tremble * 0.014 + rig.shake * 0.035) * R0;
-  const cx = logCx + (Math.random() - 0.5) * jit + noise(t * 0.6, 3) * R0 * 0.02;
-  const cy = logTop + logH * 0.15 - R * 0.62 + (Math.random() - 0.5) * jit + (act?.dy ?? 0) * R0;
+  const cxSeat = logCx + (Math.random() - 0.5) * jit + noise(t * 0.6, 3) * R0 * 0.02;
+  const cySeat = logTop + logH * 0.15 - Rseat * 0.62 + (Math.random() - 0.5) * jit + (act?.dy ?? 0) * R0;
+  // Opened up, he swells off the log to fill the glass: his round body (about one radius across,
+  // a little more below) covers it, and his tongues lick out past the top. His moods still breathe
+  // in it, just gently.
+  const R = lerp(Rseat, Math.max(W * 0.62, H * 0.72) * (0.96 + 0.04 * size), ez);
+  const cx = lerp(cxSeat, W / 2, ez), cy = lerp(cySeat, H * 0.6, ez);
   const glow = (0.55 + 0.45 * size + 0.12 * noise(t * 4, 9)) * (stored.muted ? 0.7 : 1);
 
   // How often anything takes a new pose. Hand-drawn animation holds each drawing for two frames
@@ -1423,20 +1535,33 @@ function drawFrame(now) {
   fg.clearRect(0, 0, W, H);
   fg.drawImage(bgCv, 0, 0, W, H);
   if (gl && prog) fg.drawImage(fireCv, 0, 0, W, H);
-  const F = R0 * Math.pow(size, 0.55);
-  const faceX = cx + rig.lean * R * 0.3, eyeY = cy - R * 0.06, gap = F * 0.4, mouthY = cy + R * 0.24;
+  const Fseat = R0 * Math.pow(size, 0.55);
+  const faceX = cxSeat + rig.lean * Rseat * 0.3, eyeYSeat = cySeat - Rseat * 0.06, mouthYSeat = cySeat + Rseat * 0.24;
+  // Opened up, the face parts make room for the terminal: the eyes go up to the top right corner of
+  // his core, the mouth down below it, both kept small enough to fit the margins.
+  const F = lerp(Fseat, Math.min(Fseat, H * 0.11, W * 0.12), ez), gap = F * 0.4;
+  const eyeX = lerp(faceX, W * 0.8, ez), eyeY = lerp(eyeYSeat, H * 0.075, ez);
+  const mouthX = lerp(faceX, W / 2, ez), mouthY = lerp(mouthYSeat, H * 0.915, ez);
   // The face is painted opaque on a small offscreen canvas around it, then laid onto the front
-  // layer at FACE_ALPHA, so overlapping strokes don't double up (and no extra full-window layer)
-  const fs = Math.min(dpr, 2), ox = faceX - F * 0.9, oy = eyeY - F * 0.6;
-  const fw = Math.ceil(F * 1.8), fh = Math.ceil(mouthY - oy + F * 0.75);
-  if (faceCv.width !== Math.ceil(fw * fs) || faceCv.height !== Math.ceil(fh * fs)) { faceCv.width = Math.ceil(fw * fs); faceCv.height = Math.ceil(fh * fs); }
-  faceCtx.setTransform(fs, 0, 0, fs, -ox * fs, -oy * fs);
-  faceCtx.clearRect(ox, oy, fw, fh);
-  drawEye(faceX - gap, eyeY, F, -1, open);
-  drawEye(faceX + gap, eyeY, F, 1, open);
-  drawMouth(faceX, mouthY, F, t);
-  fg.save(); fg.globalAlpha = FACE_ALPHA; fg.drawImage(faceCv, ox, oy, fw, fh); fg.restore();
-  if (logImg.complete && logImg.naturalWidth) {
+  // layer at FACE_ALPHA, so overlapping strokes don't double up (and no extra full-window layer).
+  // Seated, eyes and mouth share one; opened up they're far apart, so each gets its own pass
+  // rather than one canvas the height of the glass.
+  const fs = Math.min(dpr, 2);
+  const paintFace = (ox, oy, fw, fh, draw) => {
+    fw = Math.ceil(fw); fh = Math.ceil(fh);
+    if (faceCv.width !== Math.ceil(fw * fs) || faceCv.height !== Math.ceil(fh * fs)) { faceCv.width = Math.ceil(fw * fs); faceCv.height = Math.ceil(fh * fs); }
+    faceCtx.setTransform(fs, 0, 0, fs, -ox * fs, -oy * fs);
+    faceCtx.clearRect(ox, oy, fw, fh);
+    draw();
+    fg.save(); fg.globalAlpha = FACE_ALPHA; fg.drawImage(faceCv, ox, oy, fw, fh); fg.restore();
+  };
+  const eyes = () => { drawEye(eyeX - gap, eyeY, F, -1, open); drawEye(eyeX + gap, eyeY, F, 1, open); };
+  const mouth = () => drawMouth(mouthX, mouthY, F, t);
+  if (ez < 0.01) paintFace(faceX - F * 0.9, eyeY - F * 0.6, F * 1.8, mouthY - eyeY + F * 1.35, () => { eyes(); mouth(); });
+  else { paintFace(eyeX - F * 0.9, eyeY - F * 0.6, F * 1.8, F * 1.2, eyes); paintFace(mouthX - F * 0.9, mouthY - F * 0.75, F * 1.8, F * 1.5, mouth); }
+  // The log and his arms stay with the hearth; opened up, he has let go of them.
+  fg.save(); fg.globalAlpha = 1 - ez;
+  if (ez < 0.99 && logImg.complete && logImg.naturalWidth) {
     // The log, lit by him. Lit on its own small canvas first, so the light touches only the log
     // (on the front layer it would also tint his face where it dips into the log's area).
     const ls = Math.min(dpr, 2), lw = Math.ceil(L.w * ls), lh = Math.ceil(L.h * ls);
@@ -1446,13 +1571,14 @@ function drawFrame(now) {
     logCtx.clearRect(L.x, L.y, L.w, L.h);
     logCtx.drawImage(logImg, L.x, L.y, L.w, L.h);
     logCtx.globalCompositeOperation = 'source-atop';
-    const lg = logCtx.createRadialGradient(cx, logTop, 0, cx, logTop, logW * 0.6);
+    const lg = logCtx.createRadialGradient(cxSeat, logTop, 0, cxSeat, logTop, logW * 0.6);
     lg.addColorStop(0, css(rig.pal[1], 0.35 * glow)); lg.addColorStop(1, 'rgba(0,0,0,0)');
     logCtx.fillStyle = lg; logCtx.fillRect(L.x, L.y, L.w, L.h);
     fg.drawImage(logCv, L.x, L.y, L.w, L.h);
   }
-  fg.globalAlpha = Math.min(1, BODY_ALPHA + 0.1); // arms a touch more solid than his body: they're in front of the log
-  drawArms(cx, logTop, logH, R0 * Math.pow(size, 0.4), t, talking, (act?.dy ?? 0) * R0, faceX, eyeY);
+  fg.globalAlpha = Math.min(1, BODY_ALPHA + 0.1) * (1 - ez); // arms a touch more solid than his body: they're in front of the log
+  if (ez < 0.99) drawArms(cxSeat, logTop, logH, R0 * Math.pow(size, 0.4), t, talking, (act?.dy ?? 0) * R0, faceX, eyeYSeat);
+  fg.restore();
   fg.globalAlpha = 1;
   drawAshes(S, ears, t, dt);
   hit.fire = { x: cx, y: cy, r: R * 0.9 };

@@ -10,7 +10,8 @@
     "mood": { "usage": "mood --mood <neutral|happy|grumpy|angry|sad|scared|thinking|sleepy|smug|excited|curious|focused|bored|proud|nervous|asleep> [--for <seconds>]", "help": "Set his expression (held until changed, or for --for seconds)" },
     "react": { "usage": "react --kind <flare|sputter|sparks|wince>", "help": "A one-shot reaction: flare up, sputter low, throw sparks, wince" },
     "mic": { "usage": "mic --mode <off|wake|open>", "help": "The user's mic: off, listening for his name, or open in a conversation" },
-    "mute": { "usage": "mute --on <true|false>", "help": "Mute or unmute his voice (he still mouths the words)" }
+    "mute": { "usage": "mute --on <true|false>", "help": "Mute or unmute his voice (he still mouths the words)" },
+    "terminal": { "usage": "terminal [--on <true|false|toggle>]", "help": "Open him up to the live tmux terminal in his core (the user can double-click him too), or close it" }
   },
   "permissions": { "microphone": true, "storage": true, "network": ["http://localhost:3100", "ws://localhost:3100"] },
   "stored": {
@@ -28,6 +29,7 @@
     "micDevice": { "type": "audioinput", "label": "Microphone", "default": "" },
     "relayUrl": { "type": "text", "label": "Relay URL", "default": "http://localhost:3100" },
     "authToken": { "type": "text", "label": "Relay auth token", "default": "" },
+    "terminalToken": { "type": "text", "label": "Terminal token (control scope)", "default": "" },
     "feedSession": { "type": "text", "label": "Session id", "default": "" },
     "wakeSensitivity": { "type": "number", "label": "Wake sensitivity (%)", "default": 50, "min": 0, "max": 100 },
     "voiceInterrupt": { "type": "bool", "label": "Say his name to interrupt him", "default": true },

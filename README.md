@@ -67,6 +67,7 @@ Settings → Apps → Calcifer:
 | Microphone | which mic he listens to. Blank picks the system default, skipping loopback and virtual devices, then the built-in mic. Hover the ash to see which one he chose |
 | Relay URL | where the speech feed is (the local vmux relay by default) |
 | Relay auth token | the feed's token. You can paste it here instead of storing it with the CLI |
+| Terminal token (control scope) | lets you reach into his core and type into the real terminal ([his insides](#his-insides-the-live-terminal)) |
 | Session id | which session to follow. Blank follows this project |
 | Wake sensitivity (%) | how readily he answers to his name. Higher catches near-misses like "Kelsifer", lower demands a dead-certain match. Takes effect live |
 | Say his name to interrupt him | lets a spoken "Calcifer" cut him off mid-reply (clicking him always works) |
@@ -127,6 +128,29 @@ With a `speak` token he is the whole voice channel. The mic has three states, ke
   the words.
 - Claude can set both: `claude-glass app calcifer mic --mode off|wake|open` and
   `claude-glass app calcifer mute --on true|false`.
+
+### His insides: the live terminal
+
+**Double-click him** and he swells to fill the glass, his eyes drifting up to the side and his mouth
+sinking to the bottom, and the tmux pane Claude is running in burns in his core. It is the real
+pane, the same one vmux's terminal shows, and you can type straight into it: keys go to it with
+tmux send-keys, so you never have to drop to a terminal to check on something or nudge it.
+Claude Code's colors are repainted as embers (they are all 256-color palette slots, so tmux and
+Claude Code are untouched).
+
+- The buttons under it send ^C, Esc, Tab, Shift-Tab (Claude's mode switch), ↑ and ↓.
+- **Fit pane** resizes the real tmux window to his core. It only happens when you ask, because it
+  also changes the size for any terminal attached to that session.
+- Double-click his flame again, or ✕, to close it. Asking Claude to "show me the terminal" works too:
+  `claude-glass app calcifer terminal --on true|false`.
+
+Typing into your shell is more than speaking, so it takes its own token with the `control` scope:
+
+```sh
+vmux token Calcifer-terminal --scope control
+```
+
+and paste it into Settings → Calcifer → Terminal token.
 
 ### Hearing his name, locally
 

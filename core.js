@@ -98,6 +98,13 @@ exports.command = (state, command, args, ctx) => {
     return ctx.store(state, { mic: mode });
   }
   if (command === 'mute') return ctx.store(state, { muted: truthy(args.on) });
+  // Open him up to the live terminal in his core, or close it. The view acts on each new seq.
+  if (command === 'terminal') {
+    const raw = String(args.on ?? 'toggle').toLowerCase();
+    const on = raw === 'toggle' ? 'toggle' : truthy(raw);
+    const seq = bump(state);
+    return { ...state, seq, terminal: { on, seq } };
+  }
   if (command === 'mood') {
     const mood = String(args.mood ?? '').toLowerCase();
     if (!MOODS.includes(mood)) throw new Error(`calcifer: mood is one of ${MOODS.join(', ')}`);
