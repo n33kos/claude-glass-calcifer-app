@@ -3,10 +3,9 @@
 // The same pipe the vmux web app's terminal uses, so the same lessons apply. The relay polls
 // `tmux capture-pane -e` every 150ms and sends each snapshot as `terminal_data`; keys go back as
 // `terminal_input` (tmux send-keys), and a refit sends `terminal_resize` (tmux resize-window).
-// What vmux learned the hard way, kept here:
-//   - each snapshot is written after cursor-home, never after a clear: clearing flashed the
-//     canvas blank on every poll. (A clear-to-end AFTER it is fine: it only wipes what the
-//     previous, longer snapshot left below.)
+// What vmux learned the hard way, kept here (and one thing it never fixed, see paint()):
+//   - never clear the screen in a write of its own: that flashed the canvas blank on every poll
+//     (paint() clears and draws in one write)
 //   - keys tmux has names for go by name (the relay only accepts those); text goes literally
 //   - the pane is only resized when the user asks (refit): resizing on every layout change fought
 //     the real terminal attached to the same tmux session
@@ -94,6 +93,22 @@ function send(keys) {
   });
 }
 
+// One snapshot, drawn as the whole buffer. A snapshot is the pane plus 50 lines of its history, so
+// it is taller than the screen: written from cursor-home (vmux's way) it scrolled, and every 150ms
+// pushed another copy of those lines into xterm's own scrollback. At the bottom that hid itself;
+// scrolled up even a line, you watched the copies stream past each other. So each snapshot now
+// replaces everything — scrollback (3J), screen (2J), home — in the same write as its text, which
+// xterm parses in one go, so no blank frame is ever drawn (the flicker vmux removed came from
+// clearing on its own). Your place is kept as a distance from the bottom, so reading back through
+// the history holds still while the pane below it changes.
+function paint(term, data) {
+  const buf = term.buffer.active;
+  const fromBottom = buf.baseY - buf.viewportY;   // 0 when following the bottom
+  term.write('\x1b[3J\x1b[H\x1b[2J' + data.replace(/\n+$/, ''), () => {
+    if (fromBottom > 0) term.scrollToLine(Math.max(0, term.buffer.active.baseY - fromBottom));
+  });
+}
+
 async function open(el, { base, token, sessionId, fontFamily }) {
   const key = [base, token, sessionId].join('|');
   if (T.term && T.key === key) { T.term.focus(); return; }
@@ -116,7 +131,7 @@ async function open(el, { base, token, sessionId, fontFamily }) {
   requestAnimationFrame(() => { try { fit.fit(); } catch {} });
   term.onData(send);
   const client = new window.VmuxClient.RelayClient({ url: base, token, lockSessionId: sessionId, subscribeAudio: false });
-  client.on('terminalData', (data) => term.write('\x1b[H' + data + '\x1b[J'));
+  client.on('terminalData', (data) => paint(term, data));
   client.on('message', (m) => {
     if (m?.type === 'error' && /terminal|scope/i.test(m.message || '')) T.err = m.message;
     // The relay streams only for a client that has joined a session, and forgets the stream on a

@@ -11,7 +11,7 @@
     "react": { "usage": "react --kind <flare|sputter|sparks|wince>", "help": "A one-shot reaction: flare up, sputter low, throw sparks, wince" },
     "mic": { "usage": "mic --mode <off|wake|open>", "help": "The user's mic: off, listening for his name, or open in a conversation" },
     "mute": { "usage": "mute --on <true|false>", "help": "Mute or unmute his voice (he still mouths the words)" },
-    "terminal": { "usage": "terminal [--on <true|false|toggle>]", "help": "Open him up to the live tmux terminal in his core (the user can double-click him too), or close it" }
+    "terminal": { "usage": "terminal [--on <true|false|toggle>]", "help": "Open him up to the live tmux terminal in his core (the user can click him too), or close it" }
   },
   "permissions": { "microphone": true, "storage": true, "network": ["http://localhost:3100", "ws://localhost:3100"] },
   "stored": {

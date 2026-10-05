@@ -123,16 +123,16 @@ With a `speak` token he is the whole voice channel. The mic has three states, ke
 - **The ash pile** in front of his log is his ear. It is cold when the mic is off, a few coals
   breathing while he waits for his name, and in a conversation the whole bed rises and falls with
   how loudly you are speaking, sparking as you go. Left-click moves between off and listening (it
-  never opens a conversation by accident), and right-click talks to him right away. Click **him**
-  to mute him: his voice and the hearth's sounds go quiet, and he burns low and keeps mouthing
-  the words.
+  never opens a conversation by accident), and right-click talks to him right away. Right-click
+  **him** to mute him: his voice and the hearth's sounds go quiet, and he burns low and keeps
+  mouthing the words. (Clicking him opens [his insides](#his-insides-the-live-terminal).)
 - Claude can set both: `claude-glass app calcifer mic --mode off|wake|open` and
   `claude-glass app calcifer mute --on true|false`.
 
 ### His insides: the live terminal
 
-**Double-click him** and he swells to fill the glass, his eyes drifting up to the side and his mouth
-sinking to the bottom, and the tmux pane Claude is running in burns in his core. It is the real
+**Click him** and he swells to fill the glass, an eye either side of his core and his mouth sinking
+to the bottom, and the tmux pane Claude is running in burns in his core. It is the real
 pane, the same one vmux's terminal shows, and you can type straight into it: keys go to it with
 tmux send-keys, so you never have to drop to a terminal to check on something or nudge it.
 Claude Code's colors are repainted as embers (they are all 256-color palette slots, so tmux and
@@ -141,7 +141,7 @@ Claude Code are untouched).
 - The buttons under it send ^C, Esc, Tab, Shift-Tab (Claude's mode switch), ↑ and ↓.
 - **Fit pane** resizes the real tmux window to his core. It only happens when you ask, because it
   also changes the size for any terminal attached to that session.
-- Double-click his flame again, or ✕, to close it. Asking Claude to "show me the terminal" works too:
+- Click anywhere outside the terminal, or ✕, to close it. Asking Claude to "show me the terminal" works too:
   `claude-glass app calcifer terminal --on true|false`.
 
 Typing into your shell is more than speaking, so it takes its own token with the `control` scope:

@@ -16,7 +16,7 @@
     color: #ffcf9e; text-shadow: 0 1px 2px #000; pointer-events: none; }
   /* His insides: the live terminal, in the dark heart of his flame (terminal.js). --z is how far
      he has opened up, 0..1, set every frame. */
-  #core { position: fixed; left: 50%; top: 16vh; width: min(88vw, 1280px); height: 66vh; box-sizing: border-box;
+  #core { position: fixed; left: 50%; top: 16vh; width: min(84vw, 1280px); height: 66vh; box-sizing: border-box;
     transform: translateX(-50%) scale(calc(.9 + .1 * var(--z, 0))); opacity: var(--z, 0); visibility: hidden;
     display: flex; flex-direction: column; padding: 18px 22px 10px; border-radius: 28px;
     background: radial-gradient(ellipse 75% 70% at 50% 48%, rgba(24, 7, 2, .9) 0%, rgba(30, 9, 2, .84) 60%, rgba(40, 12, 3, .6) 100%);
@@ -53,11 +53,11 @@
     <button data-key="Up" title="Up arrow">↑</button><button data-key="Down" title="Down arrow">↓</button>
     <span class="gap"></span>
     <button data-act="refit" title="Resize the real tmux pane to fit his core">Fit pane</button>
-    <button data-act="close" title="Close (or double-click his flame)">✕</button>
+    <button data-act="close" title="Close (or click outside the terminal)">✕</button>
   </div>
 </div>
 <script src="glass-app://sdk/glass-app.js"></script>
-<script src="terminal.js?v=1"></script><!-- bump ?v= when the terminal changes -->
+<script src="terminal.js?v=2"></script><!-- bump ?v= when the terminal changes -->
 <script src="persona/calcifer.js?v=7"></script><!-- bump ?v= when the persona changes -->
 <script src="lipsync.js?v=1"></script><!-- bump ?v= when lip sync changes -->
 <script src="ears.js?v=25"></script><!-- bump ?v= when the ears change -->
@@ -1000,7 +1000,8 @@ function drawArms(cx, logTop, logH, R, t, talking, lift = 0, faceX = cx, faceY =
 //   hearing    the coals flicker (he caught something and is checking if it was his name)
 //   listening  the whole bed glows hot, swelling with your voice and throwing sparks
 //   waiting    a low steady glow (Claude's turn; the mic is closed)
-// Click the ashes: conversation on/off. Right-click (or option-click): mic off. Click him: mute.
+// Click the ashes: conversation on/off. Right-click (or option-click): mic off. Click him: the
+// terminal in his core. Right-click him: mute.
 const ASH = { cx: 0.505, cy: 0.838, rx: 0.068, ry: 0.018 };       // the pile, as fractions of the painting
 const COALS = Array.from({ length: 26 }, (_, i) => {               // fixed spots in the pile, denser at its heart
   const a = i * 2.39996, d = Math.sqrt((i + 0.5) / 26) * 0.92;
@@ -1111,9 +1112,9 @@ function drawAshes(S, ears, t, dt) {
   } else if (hit.hover === 'fire' && core.mix < 0.05) {
     c.font = `500 13px ${getComputedStyle(document.body).getPropertyValue('--font-sans') || 'system-ui'}`;
     c.textAlign = 'center'; c.textBaseline = 'top'; c.shadowColor = '#000'; c.shadowBlur = 6; c.fillStyle = '#ffe9c4';
-    c.fillText(stored.muted ? 'Muted · click to let him talk' : 'Click to mute him', hit.fire.x, hit.fire.y + hit.fire.r * 0.75);
+    c.fillText('Click to look inside', hit.fire.x, hit.fire.y + hit.fire.r * 0.75);
     c.fillStyle = 'rgba(255, 233, 196, 0.62)'; c.font = `500 11.5px ${getComputedStyle(document.body).getPropertyValue('--font-sans') || 'system-ui'}`;
-    c.fillText('Double-click to look inside', hit.fire.x, hit.fire.y + hit.fire.r * 0.75 + 17);
+    c.fillText(stored.muted ? 'Muted · right-click to let him talk' : 'Right-click to mute him', hit.fire.x, hit.fire.y + hit.fire.r * 0.75 + 17);
   }
   c.restore();
 }
@@ -1124,6 +1125,8 @@ function hitAt(e) {
 addEventListener('pointermove', (e) => { hit.hover = hitAt(e); document.body.style.cursor = hit.hover ? 'pointer' : ''; });
 addEventListener('pointerleave', () => { hit.hover = null; document.body.style.cursor = ''; });
 addEventListener('click', (e) => {
+  // Opened up, a click anywhere outside the terminal closes him (clicks inside it never get here).
+  if (core.want) return void setCore(false);
   const what = hitAt(e), mic = stored.mic || 'off';
   // While he is mid-reply or mid-task, clicking him means "stop, I want to say something" rather
   // than anything about postures. That is the one gesture that always has to work: waiting for him
@@ -1134,20 +1137,15 @@ addEventListener('click', (e) => {
   // Now it moves between the two resting states, and ends a conversation if one is running.
   // Talking to him without being called is the right button.
   if (what === 'ear') setPosture(mic === 'off' ? 'wake' : mic === 'wake' ? 'off' : 'wake');
-  // One click mutes him, two open him up. The mute waits out a double-click's window so opening
-  // him doesn't mute and unmute him on the way.
-  if (what === 'fire') {
-    clearTimeout(core.clickTimer);
-    if (e.detail >= 2) setCore(!core.want);
-    else if (!core.want) core.clickTimer = setTimeout(() => setMuted(!stored.muted), 260);
-  }
+  // Clicking him opens him up to the terminal; right-clicking him mutes him.
+  if (what === 'fire') setCore(true);
 });
 
 // ---------- His insides: the live terminal (terminal.js) ----------
-// Double-click him and he swells to fill the glass, his eyes drifting up to the side and his mouth
-// down to the bottom, and the tmux pane Claude runs in burns in his core: the real one, typed into
-// directly. `mix` eases 0..1 and drives his size, his face and the panel together.
-const core = { want: false, mix: 0, cmdSeq: null, clickTimer: 0, opened: false };
+// Click him and he swells to fill the glass, an eye either side of his core and his mouth down at
+// the bottom, and the tmux pane Claude runs in burns in it: the real one, typed into directly.
+// `mix` eases 0..1 and drives his size, his face and the panel together.
+const core = { want: false, mix: 0, cmdSeq: null, opened: false, rect: null };
 const coreEl = document.getElementById('core'), coreTerm = document.getElementById('coreTerm'), coreMsg = document.getElementById('coreMsg');
 function setCore(on) {
   if (core.want === on) return;
@@ -1202,7 +1200,9 @@ function tickCore(dt) {
   return z;
 }
 addEventListener('contextmenu', (e) => {
-  if (hitAt(e) !== 'ear') return;
+  const what = hitAt(e);
+  if (what === 'fire') { e.preventDefault(); return void setMuted(!stored.muted); }
+  if (what !== 'ear') return;
   e.preventDefault();
   setPosture('open');   // talk to him now, without saying his name first
 });
@@ -1466,9 +1466,9 @@ function drawFrame(now) {
     lookUntil = now + (around ? 350 + Math.random() * 500 : 1400 + Math.random() * 3200);
   }
   if (shown === 'asleep') open = 1; // no blinking in his sleep (the lids are already shut)
-  // Opened up, he reads along: his eyes, up at the side, look down at the terminal in his middle.
+  // Opened up, he reads along: his eyes, either side of it, look a little down into the terminal.
   const z = tickCore(dt), ez = z * z * (3 - 2 * z);
-  if (ez > 0.5 && !gazeHeld) { lookX = -0.55; lookY = 0.5; }
+  if (ez > 0.5 && !gazeHeld) lookY = 0.3;
 
   // Layout: he sits behind the log, centered on it
   const S = stage(W, H);
@@ -1537,11 +1537,17 @@ function drawFrame(now) {
   if (gl && prog) fg.drawImage(fireCv, 0, 0, W, H);
   const Fseat = R0 * Math.pow(size, 0.55);
   const faceX = cxSeat + rig.lean * Rseat * 0.3, eyeYSeat = cySeat - Rseat * 0.06, mouthYSeat = cySeat + Rseat * 0.24;
-  // Opened up, the face parts make room for the terminal: the eyes go up to the top right corner of
-  // his core, the mouth down below it, both kept small enough to fit the margins.
-  const F = lerp(Fseat, Math.min(Fseat, H * 0.11, W * 0.12), ez), gap = F * 0.4;
-  const eyeX = lerp(faceX, W * 0.8, ez), eyeY = lerp(eyeYSeat, H * 0.075, ez);
-  const mouthX = lerp(faceX, W / 2, ez), mouthY = lerp(mouthYSeat, H * 0.915, ez);
+  // Opened up, he's seen up close, so his face is bigger, and it parts round the terminal: an eye
+  // either side of it near the top (each a little behind its edge), the mouth below it. The panel's
+  // box is #core's CSS (84vw up to 1280px wide, 16vh to 82vh).
+  const pw = Math.min(W * 0.84, 1280), pLeft = (W - pw) / 2, pTop = H * 0.16, pBottom = H * 0.82;
+  const F = lerp(Fseat, Math.min(H * 0.26, W * 0.2), ez);          // the mouth
+  const FE = lerp(Fseat, Math.min(H * 0.3, W * 0.24), ez);          // the eyes, a touch bigger still
+  const gap = Fseat * 0.4, erx = FE * 0.16 * rig.eye;
+  const eyeLX = lerp(faceX - gap, Math.max(pLeft - erx * 0.15, erx * 1.3), ez);
+  const eyeRX = lerp(faceX + gap, Math.min(W - pLeft + erx * 0.15, W - erx * 1.3), ez);
+  const eyeY = lerp(eyeYSeat, pTop + H * 0.08, ez);
+  const mouthX = lerp(faceX, W / 2, ez), mouthY = lerp(mouthYSeat, (pBottom + H) / 2, ez);
   // The face is painted opaque on a small offscreen canvas around it, then laid onto the front
   // layer at FACE_ALPHA, so overlapping strokes don't double up (and no extra full-window layer).
   // Seated, eyes and mouth share one; opened up they're far apart, so each gets its own pass
@@ -1555,10 +1561,20 @@ function drawFrame(now) {
     draw();
     fg.save(); fg.globalAlpha = FACE_ALPHA; fg.drawImage(faceCv, ox, oy, fw, fh); fg.restore();
   };
-  const eyes = () => { drawEye(eyeX - gap, eyeY, F, -1, open); drawEye(eyeX + gap, eyeY, F, 1, open); };
+  // Opened up, each eye looks in at the terminal between them (gaze is shared, so it's set per eye).
+  const eye = (x, side) => {
+    const was = lookX;
+    if (ez > 0.5 && !gazeHeld) lookX = -side * 0.6;
+    drawEye(x, eyeY, FE, side, open);
+    lookX = was;
+  };
   const mouth = () => drawMouth(mouthX, mouthY, F, t);
-  if (ez < 0.01) paintFace(faceX - F * 0.9, eyeY - F * 0.6, F * 1.8, mouthY - eyeY + F * 1.35, () => { eyes(); mouth(); });
-  else { paintFace(eyeX - F * 0.9, eyeY - F * 0.6, F * 1.8, F * 1.2, eyes); paintFace(mouthX - F * 0.9, mouthY - F * 0.75, F * 1.8, F * 1.5, mouth); }
+  if (ez < 0.01) paintFace(faceX - F * 0.9, eyeY - F * 0.6, F * 1.8, mouthY - eyeY + F * 1.35, () => { eye(eyeLX, -1); eye(eyeRX, 1); mouth(); });
+  else {
+    paintFace(eyeLX - FE * 0.5, eyeY - FE * 0.6, FE, FE * 1.2, () => eye(eyeLX, -1));
+    paintFace(eyeRX - FE * 0.5, eyeY - FE * 0.6, FE, FE * 1.2, () => eye(eyeRX, 1));
+    paintFace(mouthX - F * 0.9, mouthY - F * 0.75, F * 1.8, F * 1.5, mouth);
+  }
   // The log and his arms stay with the hearth; opened up, he has let go of them.
   fg.save(); fg.globalAlpha = 1 - ez;
   if (ez < 0.99 && logImg.complete && logImg.naturalWidth) {
