@@ -123,7 +123,8 @@ With a `speak` token he is the whole voice channel. The mic has three states, ke
   breathing while he waits for his name, and in a conversation the whole bed rises and falls with
   how loudly you are speaking, sparking as you go. Left-click moves between off and listening (it
   never opens a conversation by accident), and right-click talks to him right away. Click **him**
-  to mute his voice, and he burns low and keeps mouthing the words.
+  to mute him: his voice and the hearth's sounds go quiet, and he burns low and keeps mouthing
+  the words.
 - Claude can set both: `claude-glass app calcifer mic --mode off|wake|open` and
   `claude-glass app calcifer mute --on true|false`.
 
