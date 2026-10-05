@@ -1,18 +1,17 @@
 // The scene's images: the painting without its hanging things, the log he hugs (and where it sits),
 // and the hanging things that sway, each with the hook it hangs from. Positions are fractions of
 // the painting. Each path carries ?v=<content hash> so an open glass never shows a stale copy.
-// The pot that stood at the bottom left is painted out of this copy, because the kindling pot
-// prop stands in its place and the old one showed underneath it. assets/hearth-bare.jpg is
-// kept untouched beside it as the original.
-window.HEARTH_SRC = 'assets/hearth-bare-nopot.jpg?v=634fe272';
+// The painting without its hanging things, its clay pot or the log in the firebox: the pot is a
+// prop now and the log is Calcifer's own, and both showed underneath their replacements.
+window.HEARTH_SRC = 'assets/hearth-bare.jpg?v=df57d79e';
 window.LOG_SRC = 'assets/log.png?v=d9e922d9';
-window.LOG_RECT = {"x": 0.3659018987341772, "y": 0.6898584905660378, "w": 0.26700949367088606, "h": 0.20047169811320756};
+window.LOG_RECT = {"x": 0.38592761075949367, "y": 0.708929, "w": 0.22695806962025314, "h": 0.1704009433962264};
 // Props that show how much of the plan's allowance is left. Not hung and not swaying — they sit
 // on the stone. Each was painted INTO this very picture by handing the model the bare hearth, then
 // cut back out, so the perspective, palette and light are the scene's own rather than a prop's.
 window.PROPS = [
  { "id": "logs",
-   "x": 0.674238, "y": 0.690264, "w": 0.269145, "h": 0.286557,
+   "x": 0.664238, "y": 0.690264, "w": 0.269145, "h": 0.286557,
    // Six hand-cut states in twenties: what is left of the week. Logs come off the right-hand end,
    // so the pile's left edge and base never move and the composition does not drift as it empties.
    "levels": {
