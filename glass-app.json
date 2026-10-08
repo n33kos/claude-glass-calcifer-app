@@ -22,6 +22,7 @@
     "earStatus": { "scope": "global", "default": {} },
     "wakeStatus": { "scope": "global", "default": {} },
     "feedToken": { "scope": "global", "default": "" },
+    "voiceSet": { "scope": "project", "default": "" },
     "allowance": { "scope": "global", "default": {} }
   },
   "settings": {
@@ -30,6 +31,7 @@
     "relayUrl": { "type": "text", "label": "Relay URL", "default": "http://localhost:3100" },
     "authToken": { "type": "text", "label": "Relay auth token", "default": "" },
     "terminalToken": { "type": "text", "label": "Terminal token (control scope)", "default": "" },
+    "voice": { "type": "text", "label": "Voice (Kokoro voice ID, blank for the relay default)", "default": "am_calcifer" },
     "feedSession": { "type": "text", "label": "Session id", "default": "" },
     "wakeSensitivity": { "type": "number", "label": "Wake sensitivity (%)", "default": 50, "min": 0, "max": 100 },
     "voiceInterrupt": { "type": "bool", "label": "Say his name to interrupt him", "default": true },

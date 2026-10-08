@@ -200,6 +200,40 @@ async function useFeed(on) {
     feed.retryAt = performance.now() + 5000;    // ...in a few seconds
   }
 }
+// ---------- His voice: which Kokoro voice the relay speaks this session in ----------
+// vmux 5.1+ keeps a voice override per session (session metadata, keyed by the same folder hash
+// he follows), used for every reply in that session, his speech feed included. When the Voice
+// setting has a name, he sets it each time he joins a session or the name changes; blank, he sends
+// nothing and the relay's default voice is used, except to take back an override he set himself
+// earlier (remembered in `voiceSet`). Setting session metadata takes a control token, so the
+// terminal token is used when there is one.
+const tts = { key: '', busy: false, err: '', retryAt: 0 };
+function syncVoice() {
+  const sid = feed.sessionId, want = (settings.voice ?? '').trim(), was = stored.voiceSet || '';
+  if (!sid || !window.VmuxClient || tts.busy || performance.now() < tts.retryAt) return;
+  if (!want && !was) return;                     // nothing wanted, nothing of his to take back
+  const token = (settings.terminalToken || '').trim() || (settings.authToken || '').trim() || stored.feedToken || '';
+  const key = [feedBase(), sid, want, token].join('|');
+  if (key === tts.key) return;
+  tts.key = key; tts.busy = true;
+  const client = new window.VmuxClient.RelayClient({ url: feedBase(), token });
+  client.request(`/api/session-metadata/${sid}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice_override: want || null }),
+  }).then((r) => {
+    if (r.ok) {
+      tts.err = '';
+      if (was !== want) { stored = { ...stored, voiceSet: want }; glass.store({ voiceSet: want }); }
+    } else {
+      tts.err = r.status === 403 ? 'Setting his voice needs a control token (Settings → Terminal token)'
+        : r.status === 404 ? 'This relay has no per-session voices (needs vmux 5.1 or newer)'
+        : `Couldn't set his voice (the relay answered ${r.status})`;
+    }
+  }).catch((e) => {
+    tts.err = `Couldn't set his voice: ${e?.message || e}`;
+    tts.key = ''; tts.retryAt = performance.now() + 10000;   // the relay may just be restarting
+  }).finally(() => { tts.busy = false; });
+}
+
 // ---------- His ears (ears.js): the user's mic, and talking to him by name ----------
 // The choices are stored values (mic: project, muted: global), set here, by voice, or by Claude
 // (`claude-glass app calcifer mic --mode ...`); written locally first so a frame never sees the old one.
@@ -1400,6 +1434,7 @@ function drawFrame(now) {
   let amp = 0, wide = rig.wide, press = false, line = '';
   const posture = stored.mic || 'off', muted = !!stored.muted;
   useFeed(true);   // the feed is both his voice and his relay client, so it is always wanted
+  syncVoice();
   // His voice lives in an AudioContext, and the browser suspends those when the machine sleeps —
   // nothing resumes them on its own. The reply still arrives, the word timings still arrive, his
   // mouth still moves, and not a sound comes out; the only thing that used to revive it was a
@@ -1419,7 +1454,7 @@ function drawFrame(now) {
     micDevice: (settings.micDevice || '').trim(),
     quietMs: Math.max(15, settings.quietSeconds ?? 120) * 1000,
     followMs: Math.max(0, settings.followUpSeconds ?? 4) * 1000 });
-  status.textContent = feed.err || ears.err || window.SOUNDS?.err || '';
+  status.textContent = feed.err || ears.err || tts.err || window.SOUNDS?.err || '';
   // The spotter runs whenever his mic is NOT publishing to the room, on the same input the room
   // would use: that means "wake", and also the middle of his own turn in a conversation — which is
   // the only moment a spoken interrupt could ever be heard. It stops once the mic is actually live,

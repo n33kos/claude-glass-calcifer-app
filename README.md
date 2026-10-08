@@ -67,7 +67,8 @@ Settings → Apps → Calcifer:
 | Microphone | which mic he listens to. Blank picks the system default, skipping loopback and virtual devices, then the built-in mic. Hover the ash to see which one he chose |
 | Relay URL | where the speech feed is (the local vmux relay by default) |
 | Relay auth token | the feed's token. You can paste it here instead of storing it with the CLI |
-| Terminal token (control scope) | lets you reach into his core and type into the real terminal ([his insides](#his-insides-the-live-terminal)) |
+| Terminal token (control scope) | lets you reach into his core and type into the real terminal ([his insides](#his-insides-the-live-terminal)), and lets him set his voice |
+| Voice | the Kokoro voice he speaks in (`am_calcifer` by default). With vmux 5.1 or newer he sets it as this session's voice override whenever he joins the session or you change it, so every client hears the same voice. Blank sends nothing and the relay's default voice is used (an override he set earlier is taken back). Setting it needs a control token, so fill in the terminal token |
 | Session id | which session to follow. Blank follows this project |
 | Wake sensitivity (%) | how readily he answers to his name. Higher catches near-misses like "Kelsifer", lower demands a dead-certain match. Takes effect live |
 | Say his name to interrupt him | lets a spoken "Calcifer" cut him off mid-reply (clicking him always works) |
